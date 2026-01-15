@@ -1,10 +1,19 @@
 (function () {
   "use strict";
 
-  const DT_MS = 200;               // 5 Hz
+  const DT_MS = 200;               // default 5 Hz fallback
   const FADE_OUT_MS = 600_000;     // 10 minutes
   const SURF_MODE_SET = new Set(["7", "7.0"]);
+  const TOW_MODE_SET  = new Set(["1", "1.0"]);
   const LOGS_DIR = "logs";
+
+  // Force "surfing" (nav mode 7) to be green so "green segments" are always mode 7.
+  const FORCE_COLORS = {
+    "7":   "#00a000",
+    "7.0": "#00a000",
+    "1":   "#377eb8",
+    "1.0": "#377eb8"
+  };
 
   const TILE_LAYERS = [
     { name: "Streets (OSM)", layer: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -16,9 +25,9 @@
   ];
 
   const PALETTE = [
-    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a6cee3", "#b2182b",
-    "#2166ac", "#1b7837", "#000000", "#666666", "#762a83", "#f781bf", "#80b1d3",
-    "#b3de69", "#fdbf6f"
+    "#e41a1c", "#984ea3", "#ff7f00", "#a6cee3", "#b2182b",
+    "#2166ac", "#1b7837", "#000000", "#666666", "#762a83", "#f781bf",
+    "#80b1d3", "#b3de69", "#fdbf6f"
   ];
 
   const el = {
@@ -31,12 +40,12 @@
     logSelect: document.getElementById("logSelect"),
     legendItems: document.getElementById("legendItems"),
     status: document.getElementById("status"),
+    insightsBody: document.getElementById("insightsBody"),
   };
 
   function setStatus(msg) { el.status.textContent = msg ? `— ${msg}` : ""; }
 
   const map = L.map("map", { center: [39.2776, -74.5746], zoom: 13, zoomControl: true });
-
   const baseLayers = {};
   TILE_LAYERS.forEach((t, i) => { baseLayers[t.name] = t.layer; if (i === 1) t.layer.addTo(map); });
   L.control.layers(baseLayers, null, { collapsed: false }).addTo(map);
@@ -62,10 +71,18 @@
     playing: false,
     accMs: 0,
     lastFrame: null,
+
     lats: [], lons: [], modes: [],
-    startEpochMs: 0,
+    timesMs: null,          // array of epoch ms, aligned to points, if available
+    startEpochMs: 0,        // for display only
+    dtMs: DT_MS,            // effective dt for playback/labels (median if timesMs available)
     modeColors: {}, uniqueModes: [],
-    surfEndToDist: {},
+
+    // per-surf-run stats: endIndex -> {distM, durMs, startIdx, endIdx}
+    surfEndToStats: {},
+
+    // global stats
+    insights: null,
   };
 
   function updateFadeButton() {
@@ -80,6 +97,23 @@
     const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
     const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
     return 2*R*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+  function clamp(n, lo, hi){ return Math.max(lo, Math.min(hi, n)); }
+
+  function fmtMMSS(ms){
+    const s = Math.max(0, Math.round(ms/1000));
+    const m = Math.floor(s/60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2,"0")}`;
+  }
+
+  function fmtHHMMSS(ms){
+    const s = Math.max(0, Math.round(ms/1000));
+    const h = Math.floor(s/3600);
+    const m = Math.floor((s%3600)/60);
+    const r = s % 60;
+    if (h>0) return `${h}:${String(m).padStart(2,"0")}:${String(r).padStart(2,"0")}`;
+    return `${m}:${String(r).padStart(2,"0")}`;
   }
 
   function alphaFor(i, idx){
@@ -99,7 +133,7 @@
   function drawSegment(i0,i1,a){
     if(a<=0) return;
     const [x0,y0]=project(i0), [x1,y1]=project(i1);
-    const color=state.modeColors[state.modes[i0]] || PALETTE[0];
+    const color=state.modeColors[state.modes[i0]] || "#000";
     ctx.globalAlpha=a;
     ctx.strokeStyle=color; ctx.lineWidth=3; ctx.lineCap="round";
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
@@ -108,7 +142,7 @@
   function drawPoint(i,a){
     if(a<=0) return;
     const [x,y]=project(i);
-    const color=state.modeColors[state.modes[i]] || PALETTE[0];
+    const color=state.modeColors[state.modes[i]] || "#000";
     ctx.globalAlpha=a;
     ctx.fillStyle=color; ctx.strokeStyle="#111"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.arc(x,y,3.3,0,Math.PI*2); ctx.fill(); ctx.stroke();
@@ -120,19 +154,19 @@
     ctx.globalAlpha=a;
     ctx.font="12px ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial";
     ctx.textBaseline="middle"; ctx.textAlign="left";
-    ctx.strokeStyle="rgba(255,255,255,0.9)"; ctx.lineWidth=4;
+    ctx.strokeStyle="rgba(255,255,255,0.92)"; ctx.lineWidth=4;
     ctx.strokeText(text,x+8,y);
     ctx.fillStyle="#111"; ctx.lineWidth=1;
     ctx.fillText(text,x+8,y);
   }
 
   function formatTimeLabel(idx){
-    const elapsed=(idx*DT_MS)/1000.0;
+    const elapsedMs = idx * state.dtMs;
     if(state.startEpochMs && state.startEpochMs>0){
-      const t=new Date(state.startEpochMs + idx*DT_MS);
-      return `${t.toLocaleTimeString()}  (t+${elapsed.toFixed(1)}s)`;
+      const t=new Date(state.startEpochMs + elapsedMs);
+      return `${t.toLocaleTimeString()}  (t+${(elapsedMs/1000).toFixed(1)}s)`;
     }
-    return `t=${elapsed.toFixed(1)}s`;
+    return `t=${(elapsedMs/1000).toFixed(1)}s`;
   }
 
   function redraw(idx){
@@ -142,9 +176,13 @@
 
     for(let i=start+1;i<=idx;i++) drawSegment(i-1,i,alphaFor(i,idx));
     for(let i=start;i<=idx;i++) drawPoint(i,alphaFor(i,idx));
+
     for(let i=start;i<=idx;i++){
-      const dist=state.surfEndToDist[i];
-      if(dist!==undefined) drawLabel(i, `${Math.round(dist)} m`, alphaFor(i,idx));
+      const st = state.surfEndToStats[i];
+      if(st){
+        const a = alphaFor(i,idx);
+        drawLabel(i, `${Math.round(st.distM)} m • ${fmtMMSS(st.durMs)}`, a);
+      }
     }
   }
 
@@ -189,6 +227,43 @@
     return {parsed:null, ok:false};
   }
 
+  function computeMedianDt(timesMs){
+    if(!timesMs) return DT_MS;
+    const diffs=[];
+    for(let i=1;i<timesMs.length;i++){
+      const a=timesMs[i-1], b=timesMs[i];
+      if(!isFinite(a)||!isFinite(b)) continue;
+      const d=b-a;
+      if(d>0 && d<5000) diffs.push(d);
+    }
+    if(diffs.length<10) return DT_MS;
+    diffs.sort((x,y)=>x-y);
+    const mid = Math.floor(diffs.length/2);
+    const med = (diffs.length%2===0) ? (diffs[mid-1]+diffs[mid])/2 : diffs[mid];
+    return clamp(med, 50, 1000);
+  }
+
+  function assignColors(uniqueModes){
+    const colors = {};
+    const used = new Set();
+    for(const m of uniqueModes){
+      if(FORCE_COLORS[m]){
+        colors[m]=FORCE_COLORS[m];
+        used.add(FORCE_COLORS[m]);
+      }
+    }
+    let pi=0;
+    for(const m of uniqueModes){
+      if(colors[m]) continue;
+      while(pi<PALETTE.length && used.has(PALETTE[pi])) pi++;
+      const c = PALETTE[pi % PALETTE.length];
+      colors[m]=c;
+      used.add(c);
+      pi++;
+    }
+    return colors;
+  }
+
   function renderLegend(){
     el.legendItems.innerHTML="";
     for(const mode of state.uniqueModes){
@@ -196,12 +271,99 @@
       item.className="legend-item";
       const sw=document.createElement("span");
       sw.className="swatch";
-      sw.style.background=state.modeColors[mode];
+      sw.style.background=state.modeColors[mode] || "#000";
       const label=document.createElement("span");
       label.textContent=mode;
       item.appendChild(sw); item.appendChild(label);
       el.legendItems.appendChild(item);
     }
+  }
+
+  function durationBetweenIdx(startIdx, endIdx){
+    if(endIdx<=startIdx) return 0;
+    if(state.timesMs && isFinite(state.timesMs[startIdx]) && isFinite(state.timesMs[endIdx])){
+      const d = state.timesMs[endIdx] - state.timesMs[startIdx];
+      return d>0 ? d : (endIdx-startIdx)*state.dtMs;
+    }
+    return (endIdx-startIdx)*state.dtMs;
+  }
+
+  function segmentRunsByMode(targetSet){
+    const runs=[];
+    const n=state.modes.length;
+    let i=0;
+    while(i<n){
+      if(!targetSet.has(state.modes[i])){ i++; continue; }
+      const start=i;
+      let dist=0;
+      i++;
+      while(i<n && targetSet.has(state.modes[i])){
+        dist += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
+        i++;
+      }
+      const end=i-1;
+      const durMs = durationBetweenIdx(start, end);
+      runs.push({startIdx:start, endIdx:end, distM:dist, durMs});
+    }
+    return runs;
+  }
+
+  function totalDistanceForModeSet(modeSet){
+    let dist=0;
+    for(let i=1;i<state.modes.length;i++){
+      if(modeSet.has(state.modes[i-1]) && modeSet.has(state.modes[i])){
+        dist += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
+      }
+    }
+    return dist;
+  }
+
+  function computeInsights(){
+    const surfRuns = segmentRunsByMode(SURF_MODE_SET);
+    const towRuns  = segmentRunsByMode(TOW_MODE_SET);
+
+    const numWaves = surfRuns.filter(r => r.endIdx > r.startIdx).length;
+    const top10 = [...surfRuns].map(r => r.distM).sort((a,b)=>b-a).slice(0,10);
+
+    const totalDistFoil = surfRuns.reduce((a,r)=>a+r.distM,0);
+    const totalDistTow  = totalDistanceForModeSet(TOW_MODE_SET);
+
+    const totalTimeFoil = surfRuns.reduce((a,r)=>a+r.durMs,0);
+    const totalTimeTow  = towRuns.reduce((a,r)=>a+r.durMs,0);
+
+    let sessionMs = 0;
+    if(state.timesMs && state.timesMs.length>=2 && isFinite(state.timesMs[0]) && isFinite(state.timesMs[state.timesMs.length-1])){
+      sessionMs = state.timesMs[state.timesMs.length-1] - state.timesMs[0];
+      if(sessionMs < 0) sessionMs = 0;
+    } else {
+      sessionMs = (state.modes.length-1) * state.dtMs;
+    }
+
+    return { numWaves, top10, totalDistFoil, totalDistTow, totalTimeFoil, totalTimeTow, sessionMs };
+  }
+
+  function renderInsights(ins){
+    if(!ins){
+      el.insightsBody.innerHTML = `<div class="muted">Load a session to see stats.</div>`;
+      return;
+    }
+
+    const rows = [
+      ["No. of waves", String(ins.numWaves)],
+      ["Total distance on foil", `${Math.round(ins.totalDistFoil)} m`],
+      ["Total time on foil", fmtHHMMSS(ins.totalTimeFoil)],
+      ["Total distance towing (nav 1)", `${Math.round(ins.totalDistTow)} m`],
+      ["Total time towing (nav 1)", fmtHHMMSS(ins.totalTimeTow)],
+      ["Total session time", fmtHHMMSS(ins.sessionMs)],
+    ];
+
+    const topList = ins.top10.length
+      ? `<ol class="insights-list">${ins.top10.map(d=>`<li>${Math.round(d)} m</li>`).join("")}</ol>`
+      : `<div class="muted">No nav mode 7 runs found.</div>`;
+
+    el.insightsBody.innerHTML =
+      rows.map(([k,v]) => `<div class="insights-row"><span>${k}</span><span class="mono">${v}</span></div>`).join("") +
+      `<div style="margin-top:10px;"><div style="font-weight:600;">Top 10 waves (distance)</div>${topList}</div>`;
   }
 
   function ingestRows(rows){
@@ -217,11 +379,13 @@
     }
     if(cleaned.length<2){
       setStatus("Not enough valid GPS points.");
-      state.loaded=false; clear(); return;
+      state.loaded=false; state.insights=null; renderInsights(null); clear(); return;
     }
 
-    const times=cleaned.map(x=>x.time);
-    const tp=parseTimeColumn(times);
+    // Sort by boogie gps time when parsable
+    const timesRaw = cleaned.map(x=>x.time);
+    const tp=parseTimeColumn(timesRaw);
+    let timesMsSorted = null;
     if(tp.ok){
       const idxs=cleaned.map((_,i)=>i);
       idxs.sort((a,b)=>{
@@ -232,8 +396,9 @@
         return ta-tb;
       });
       const sorted=idxs.map(i=>cleaned[i]);
+      timesMsSorted = idxs.map(i=>tp.parsed[i]);
       cleaned.length=0; cleaned.push(...sorted);
-      state.startEpochMs = tp.parsed[idxs[0]];
+      state.startEpochMs = timesMsSorted.find(x=>isFinite(x)) || 0;
     } else {
       state.startEpochMs = 0;
     }
@@ -241,32 +406,34 @@
     state.lats=cleaned.map(x=>Math.round(x.lat*1e6)/1e6);
     state.lons=cleaned.map(x=>Math.round(x.lon*1e6)/1e6);
     state.modes=cleaned.map(x=>x.mode);
+    state.timesMs = timesMsSorted;
 
+    state.dtMs = computeMedianDt(state.timesMs);
+
+    // Unique modes
     const seen=new Set(); state.uniqueModes=[];
     for(const m of state.modes){ if(!seen.has(m)){ seen.add(m); state.uniqueModes.push(m); } }
 
-    state.modeColors={};
-    state.uniqueModes.forEach((m,i)=>{ state.modeColors[m]=PALETTE[i%PALETTE.length]; });
+    // Colors (forced for 7 and 1)
+    state.modeColors = assignColors(state.uniqueModes);
 
-    state.surfEndToDist={};
-    let i=0;
-    while(i<state.modes.length){
-      if(!SURF_MODE_SET.has(state.modes[i])){ i++; continue; }
-      const start=i;
-      let dist=0;
-      i++;
-      while(i<state.modes.length && SURF_MODE_SET.has(state.modes[i])){
-        dist += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
-        i++;
+    // Surf run labels
+    state.surfEndToStats = {};
+    const surfRuns = segmentRunsByMode(SURF_MODE_SET);
+    for(const r of surfRuns){
+      if(r.endIdx > r.startIdx){
+        state.surfEndToStats[r.endIdx] = {distM: r.distM, durMs: r.durMs, startIdx: r.startIdx, endIdx: r.endIdx};
       }
-      const end=i-1;
-      if(end>start) state.surfEndToDist[end]=dist;
     }
 
     renderLegend();
     const latlngs=state.lats.map((lat,k)=>[lat,state.lons[k]]);
     map.fitBounds(L.latLngBounds(latlngs), {padding:[20,20]});
 
+    state.insights = computeInsights();
+    renderInsights(state.insights);
+
+    // Reset playback
     state.loaded=true;
     state.currentIdx=0;
     state.playing=false;
@@ -277,7 +444,7 @@
     el.slider.value="0";
     el.timeLabel.textContent=formatTimeLabel(0);
 
-    clear(); // blank at start
+    clear();
     setStatus(`Loaded ${state.lats.length.toLocaleString()} points.`);
   }
 
@@ -299,6 +466,7 @@
     return await resp.text();
   }
 
+  // Dropdown listing /logs
   function detectOwnerRepo(){
     const host=window.location.hostname;
     const path=window.location.pathname.replace(/\/+$/,"");
@@ -309,6 +477,30 @@
       return {owner, repo};
     }
     return null;
+  }
+
+  function prettyLogLabel(filename){
+    const base = filename.replace(/\.csv$/i, "");
+
+    // ISO-like: YYYY-MM-DD[T _-]HH[_:-]MM([_:-]SS)?
+    let m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})[T _-](\d{1,2})[:_-](\d{1,2})(?:[:_-](\d{1,2}))?/);
+    if (m){
+      const y = Number(m[1]), mo = Number(m[2])-1, d = Number(m[3]);
+      const hh = Number(m[4]), mm = Number(m[5]), ss = Number(m[6]||"0");
+      const dt = new Date(y, mo, d, hh, mm, ss);
+      const datePart = dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
+      const timePart = dt.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit" });
+      return `${datePart} ${timePart}`;
+    }
+
+    // date only
+    m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})/);
+    if (m){
+      const dt = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+      return dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
+    }
+
+    return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\s+/g, " ").trim();
   }
 
   async function listLogsViaGitHubAPI(){
@@ -348,7 +540,8 @@
     for(const f of files){
       const opt=document.createElement("option");
       opt.value=f.url;
-      opt.textContent=f.name;
+      opt.textContent=prettyLogLabel(f.name);
+      opt.dataset.filename = f.name;
       el.logSelect.appendChild(opt);
     }
 
@@ -367,14 +560,15 @@
   async function loadSelectedLog(){
     const url=el.logSelect.value;
     if(!url) return;
-    const name=el.logSelect.options[el.logSelect.selectedIndex]?.textContent || "log";
-    setStatus(`Loading ${name}…`);
+    const opt = el.logSelect.options[el.logSelect.selectedIndex];
+    const filename = opt?.dataset?.filename || "log";
+    setStatus(`Loading ${filename}…`);
     try{
       const text=await fetchText(url);
       loadCsvText(text);
     } catch(e){
       console.error("Failed to load log:", e);
-      setStatus(`Failed to load ${name}: ${e.message}`);
+      setStatus(`Failed to load ${filename}: ${e.message}`);
     }
   }
 
@@ -387,8 +581,8 @@
     state.lastFrame=ts;
     state.accMs+=delta;
 
-    while(state.accMs>=DT_MS){
-      state.accMs-=DT_MS;
+    while(state.accMs>=state.dtMs){
+      state.accMs-=state.dtMs;
       if(state.currentIdx < state.lats.length-1){
         state.currentIdx+=1;
         el.slider.value=String(state.currentIdx);
@@ -429,6 +623,7 @@
   el.logSelect.addEventListener("change", loadSelectedLog);
 
   // Init
+  el.insightsBody.innerHTML = `<div class="muted">Load a session to see stats.</div>`;
   resizeCanvas();
   clear();
   el.timeLabel.textContent=formatTimeLabel(0);

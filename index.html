@@ -25,12 +25,10 @@
         <button id="btnFade" class="btn">Fade: On</button>
         <label class="label">Speed:
           <select id="selSpeed" class="select">
-            <option value="0.25">0.25×</option>
-            <option value="0.5">0.5×</option>
             <option value="1" selected>1×</option>
-            <option value="2">2×</option>
             <option value="4">4×</option>
             <option value="8">8×</option>
+            <option value="16">16×</option>
           </select>
         </label>
       </div>
@@ -51,8 +49,15 @@
 
     <div class="hint">
       Track starts blank. Hit <b>Play</b> or drag the slider. Fade horizon: <b>10 minutes</b> (toggle with Fade).
-      Nav mode <b>7</b> runs are labeled with distance (m) at the run end.
+      Nav mode <b>7</b> runs show <b>distance</b> + <b>duration</b> at the run end.
       <span id="status" class="status"></span>
+    </div>
+  </div>
+
+  <div id="insights" class="panel insights">
+    <div class="insights-title">Session insights</div>
+    <div id="insightsBody" class="insights-body">
+      <div class="muted">Load a session to see stats.</div>
     </div>
   </div>
 

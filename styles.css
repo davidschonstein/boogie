@@ -17,7 +17,7 @@ html, body { height: 100%; margin: 0; }
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  min-width: 620px;
+  min-width: 680px;
   max-width: calc(100vw - 24px);
 }
 
@@ -28,8 +28,8 @@ html, body { height: 100%; margin: 0; }
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
-
 #playbackControls .row:last-child{ margin-bottom: 0; }
+
 .group{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .btn{
@@ -52,7 +52,7 @@ html, body { height: 100%; margin: 0; }
   white-space: nowrap;
 }
 
-.hint{ font-size: 12px; color: #333; max-width: 900px; }
+.hint{ font-size: 12px; color: #333; max-width: 980px; }
 .status{ margin-left: 10px; color: #444; }
 
 .legend{
@@ -65,7 +65,39 @@ html, body { height: 100%; margin: 0; }
 .legend-item{ display: flex; align-items: center; margin-bottom: 6px; }
 .swatch{ width: 14px; height: 14px; border: 1px solid #333; margin-right: 8px; }
 
-@media (max-width: 760px){
+.insights{
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.insights-title{
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.insights-body{
+  font-size: 12px;
+  color: #111;
+}
+.insights-row{
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.12);
+}
+.insights-row:last-child{ border-bottom: none; }
+.muted{ color: #444; }
+.insights-list{
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+.insights-list li{ margin: 2px 0; }
+
+@media (max-width: 980px){
   #playbackControls{ min-width: unset; }
   #timeSlider{ width: 280px; }
+  .insights{ display:none; }
 }
