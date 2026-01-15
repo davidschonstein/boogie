@@ -17,13 +17,15 @@
 <body>
   <div id="map"></div>
 
+  <!-- Playback controls (top-right; avoids Leaflet zoom/layers in top-left) -->
   <div id="playbackControls" class="panel">
-    <div class="row">
+    <div class="row compact">
       <div class="group">
-        <button id="btnPlay" class="btn">▶ Play</button>
-        <button id="btnPause" class="btn">❚❚ Pause</button>
-        <button id="btnFade" class="btn">Fade: On</button>
-        <label class="label">Speed:
+        <button id="btnPlay" class="btn">▶</button>
+        <button id="btnPause" class="btn">❚❚</button>
+        <button id="btnFade" class="btn">Fade</button>
+
+        <label class="label">Speed
           <select id="selSpeed" class="select">
             <option value="1" selected>1×</option>
             <option value="4">4×</option>
@@ -34,26 +36,36 @@
       </div>
 
       <div class="group">
-        <label class="label">Session:
-          <select id="logSelect" class="select">
-            <option value="">Loading…</option>
-          </select>
-        </label>
+        <button id="btnToggleInsights" class="btn">Insights</button>
+        <button id="btnToggleLegend" class="btn">Legend</button>
       </div>
     </div>
 
-    <div class="row">
+    <div class="row compact">
+      <label class="label">Session
+        <select id="logSelect" class="select">
+          <option value="">Loading…</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row compact">
       <input id="timeSlider" type="range" min="0" value="0" step="1" />
       <div id="timeLabel" class="mono">t=0.0s</div>
     </div>
 
-    <div class="hint">
+    <div class="row compact meta">
+      <a href="#" id="toggleInstructions" class="link">Instructions</a>
+      <span id="status" class="status"></span>
+    </div>
+
+    <div id="instructions" class="instructions hidden">
       Track starts blank. Hit <b>Play</b> or drag the slider. Fade horizon: <b>10 minutes</b> (toggle with Fade).
       Nav mode <b>7</b> runs show <b>distance</b> + <b>duration</b> at the run end.
-      <span id="status" class="status"></span>
     </div>
   </div>
 
+  <!-- Insights panel (center-right) -->
   <div id="insights" class="panel insights">
     <div class="insights-title">Session insights</div>
     <div id="insightsBody" class="insights-body">
@@ -61,8 +73,9 @@
     </div>
   </div>
 
+  <!-- Legend (bottom-right; smaller) -->
   <div id="legend" class="panel legend">
-    <div class="legend-title">Nav mode legend</div>
+    <div class="legend-title">Nav mode</div>
     <div id="legendItems"></div>
   </div>
 

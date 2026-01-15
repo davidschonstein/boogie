@@ -7,7 +7,6 @@
   const TOW_MODE_SET  = new Set(["1", "1.0"]);
   const LOGS_DIR = "logs";
 
-  // Force "surfing" (nav mode 7) to be green so "green segments" are always mode 7.
   const FORCE_COLORS = {
     "7":   "#00a000",
     "7.0": "#00a000",
@@ -38,17 +37,23 @@
     slider: document.getElementById("timeSlider"),
     timeLabel: document.getElementById("timeLabel"),
     logSelect: document.getElementById("logSelect"),
+    legend: document.getElementById("legend"),
     legendItems: document.getElementById("legendItems"),
-    status: document.getElementById("status"),
+    insights: document.getElementById("insights"),
     insightsBody: document.getElementById("insightsBody"),
+    btnToggleInsights: document.getElementById("btnToggleInsights"),
+    btnToggleLegend: document.getElementById("btnToggleLegend"),
+    status: document.getElementById("status"),
+    toggleInstructions: document.getElementById("toggleInstructions"),
+    instructions: document.getElementById("instructions"),
   };
 
-  function setStatus(msg) { el.status.textContent = msg ? `— ${msg}` : ""; }
+  function setStatus(msg) { el.status.textContent = msg ? msg : ""; }
 
   const map = L.map("map", { center: [39.2776, -74.5746], zoom: 13, zoomControl: true });
   const baseLayers = {};
   TILE_LAYERS.forEach((t, i) => { baseLayers[t.name] = t.layer; if (i === 1) t.layer.addTo(map); });
-  L.control.layers(baseLayers, null, { collapsed: false }).addTo(map);
+  L.control.layers(baseLayers, null, { collapsed: true, position: "topleft" }).addTo(map);
 
   const canvas = document.createElement("canvas");
   canvas.id = "trackCanvas";
@@ -73,20 +78,17 @@
     lastFrame: null,
 
     lats: [], lons: [], modes: [],
-    timesMs: null,          // array of epoch ms, aligned to points, if available
-    startEpochMs: 0,        // for display only
-    dtMs: DT_MS,            // effective dt for playback/labels (median if timesMs available)
+    timesMs: null,
+    startEpochMs: 0,
+    dtMs: DT_MS,
     modeColors: {}, uniqueModes: [],
-
-    // per-surf-run stats: endIndex -> {distM, durMs, startIdx, endIdx}
     surfEndToStats: {},
 
-    // global stats
     insights: null,
   };
 
   function updateFadeButton() {
-    el.btnFade.textContent = state.fadeEnabled ? "Fade: On" : "Fade: Off";
+    el.btnFade.textContent = state.fadeEnabled ? "Fade On" : "Fade Off";
     el.btnFade.style.opacity = state.fadeEnabled ? "1.0" : "0.85";
   }
   updateFadeButton();
@@ -106,7 +108,6 @@
     const r = s % 60;
     return `${m}:${String(r).padStart(2,"0")}`;
   }
-
   function fmtHHMMSS(ms){
     const s = Math.max(0, Math.round(ms/1000));
     const h = Math.floor(s/3600);
@@ -164,7 +165,7 @@
     const elapsedMs = idx * state.dtMs;
     if(state.startEpochMs && state.startEpochMs>0){
       const t=new Date(state.startEpochMs + elapsedMs);
-      return `${t.toLocaleTimeString()}  (t+${(elapsedMs/1000).toFixed(1)}s)`;
+      return `${t.toLocaleTimeString()}  (+${(elapsedMs/1000).toFixed(1)}s)`;
     }
     return `t=${(elapsedMs/1000).toFixed(1)}s`;
   }
@@ -194,9 +195,6 @@
     ctx.setTransform(dpr,0,0,dpr,0,0);
     redraw(state.currentIdx);
   }
-  window.addEventListener("resize", resizeCanvas);
-  map.on("resize", resizeCanvas);
-  map.on("move zoom", ()=>redraw(state.currentIdx));
 
   function normalizeMode(v){
     if(v===null||v===undefined) return "unknown";
@@ -319,17 +317,17 @@
   }
 
   function computeInsights(){
-    const surfRuns = segmentRunsByMode(SURF_MODE_SET);
+    const waveRuns = segmentRunsByMode(SURF_MODE_SET);
     const towRuns  = segmentRunsByMode(TOW_MODE_SET);
 
-    const numWaves = surfRuns.filter(r => r.endIdx > r.startIdx).length;
-    const top10 = [...surfRuns].map(r => r.distM).sort((a,b)=>b-a).slice(0,10);
+    const numWaves = waveRuns.filter(r => r.endIdx > r.startIdx).length;
+    const top10 = [...waveRuns].map(r => r.distM).sort((a,b)=>b-a).slice(0,10);
 
-    const totalDistFoil = surfRuns.reduce((a,r)=>a+r.distM,0);
-    const totalDistTow  = totalDistanceForModeSet(TOW_MODE_SET);
+    const totalDistWaves = waveRuns.reduce((a,r)=>a+r.distM,0);
+    const totalDistTow   = totalDistanceForModeSet(TOW_MODE_SET);
 
-    const totalTimeFoil = surfRuns.reduce((a,r)=>a+r.durMs,0);
-    const totalTimeTow  = towRuns.reduce((a,r)=>a+r.durMs,0);
+    const totalTimeWaves = waveRuns.reduce((a,r)=>a+r.durMs,0);
+    const totalTimeTow   = towRuns.reduce((a,r)=>a+r.durMs,0);
 
     let sessionMs = 0;
     if(state.timesMs && state.timesMs.length>=2 && isFinite(state.timesMs[0]) && isFinite(state.timesMs[state.timesMs.length-1])){
@@ -339,7 +337,7 @@
       sessionMs = (state.modes.length-1) * state.dtMs;
     }
 
-    return { numWaves, top10, totalDistFoil, totalDistTow, totalTimeFoil, totalTimeTow, sessionMs };
+    return { numWaves, top10, totalDistWaves, totalDistTow, totalTimeWaves, totalTimeTow, sessionMs };
   }
 
   function renderInsights(ins){
@@ -350,10 +348,10 @@
 
     const rows = [
       ["No. of waves", String(ins.numWaves)],
-      ["Total distance on foil", `${Math.round(ins.totalDistFoil)} m`],
-      ["Total time on foil", fmtHHMMSS(ins.totalTimeFoil)],
-      ["Total distance towing (nav 1)", `${Math.round(ins.totalDistTow)} m`],
-      ["Total time towing (nav 1)", fmtHHMMSS(ins.totalTimeTow)],
+      ["Total distance on waves", `${Math.round(ins.totalDistWaves)} m`],
+      ["Total time on waves", fmtHHMMSS(ins.totalTimeWaves)],
+      ["Total distance towing", `${Math.round(ins.totalDistTow)} m`],
+      ["Total time towing", fmtHHMMSS(ins.totalTimeTow)],
       ["Total session time", fmtHHMMSS(ins.sessionMs)],
     ];
 
@@ -382,10 +380,10 @@
       state.loaded=false; state.insights=null; renderInsights(null); clear(); return;
     }
 
-    // Sort by boogie gps time when parsable
     const timesRaw = cleaned.map(x=>x.time);
     const tp=parseTimeColumn(timesRaw);
     let timesMsSorted = null;
+
     if(tp.ok){
       const idxs=cleaned.map((_,i)=>i);
       idxs.sort((a,b)=>{
@@ -407,22 +405,17 @@
     state.lons=cleaned.map(x=>Math.round(x.lon*1e6)/1e6);
     state.modes=cleaned.map(x=>x.mode);
     state.timesMs = timesMsSorted;
-
     state.dtMs = computeMedianDt(state.timesMs);
 
-    // Unique modes
     const seen=new Set(); state.uniqueModes=[];
     for(const m of state.modes){ if(!seen.has(m)){ seen.add(m); state.uniqueModes.push(m); } }
-
-    // Colors (forced for 7 and 1)
     state.modeColors = assignColors(state.uniqueModes);
 
-    // Surf run labels
     state.surfEndToStats = {};
-    const surfRuns = segmentRunsByMode(SURF_MODE_SET);
-    for(const r of surfRuns){
+    const waveRuns = segmentRunsByMode(SURF_MODE_SET);
+    for(const r of waveRuns){
       if(r.endIdx > r.startIdx){
-        state.surfEndToStats[r.endIdx] = {distM: r.distM, durMs: r.durMs, startIdx: r.startIdx, endIdx: r.endIdx};
+        state.surfEndToStats[r.endIdx] = {distM: r.distM, durMs: r.durMs};
       }
     }
 
@@ -433,7 +426,6 @@
     state.insights = computeInsights();
     renderInsights(state.insights);
 
-    // Reset playback
     state.loaded=true;
     state.currentIdx=0;
     state.playing=false;
@@ -445,7 +437,7 @@
     el.timeLabel.textContent=formatTimeLabel(0);
 
     clear();
-    setStatus(`Loaded ${state.lats.length.toLocaleString()} points.`);
+    setStatus(`Loaded ${state.lats.length.toLocaleString()} pts`);
   }
 
   function loadCsvText(text){
@@ -466,7 +458,6 @@
     return await resp.text();
   }
 
-  // Dropdown listing /logs
   function detectOwnerRepo(){
     const host=window.location.hostname;
     const path=window.location.pathname.replace(/\/+$/,"");
@@ -481,8 +472,6 @@
 
   function prettyLogLabel(filename){
     const base = filename.replace(/\.csv$/i, "");
-
-    // ISO-like: YYYY-MM-DD[T _-]HH[_:-]MM([_:-]SS)?
     let m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})[T _-](\d{1,2})[:_-](\d{1,2})(?:[:_-](\d{1,2}))?/);
     if (m){
       const y = Number(m[1]), mo = Number(m[2])-1, d = Number(m[3]);
@@ -492,14 +481,11 @@
       const timePart = dt.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit" });
       return `${datePart} ${timePart}`;
     }
-
-    // date only
     m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})/);
     if (m){
       const dt = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
       return dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
     }
-
     return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\s+/g, " ").trim();
   }
 
@@ -518,21 +504,21 @@
   }
 
   async function populateLogDropdown(){
-    setStatus("Loading logs list…");
+    setStatus("Loading logs…");
     el.logSelect.innerHTML = `<option value="">Loading…</option>`;
     let files=[];
     try {
       files = await listLogsViaGitHubAPI();
     } catch(e){
       console.warn("Failed to list logs via GitHub API:", e);
-      el.logSelect.innerHTML = `<option value="">(No logs found)</option>`;
-      setStatus("Could not list /logs. Host on GitHub Pages and commit logs.");
+      el.logSelect.innerHTML = `<option value="">(No logs)</option>`;
+      setStatus("Could not list /logs");
       return;
     }
 
     if(!files.length){
-      el.logSelect.innerHTML = `<option value="">(No .csv logs in /logs)</option>`;
-      setStatus("No logs found in /logs.");
+      el.logSelect.innerHTML = `<option value="">(No .csv in /logs)</option>`;
+      setStatus("No logs in /logs");
       return;
     }
 
@@ -568,11 +554,10 @@
       loadCsvText(text);
     } catch(e){
       console.error("Failed to load log:", e);
-      setStatus(`Failed to load ${filename}: ${e.message}`);
+      setStatus(`Failed: ${e.message}`);
     }
   }
 
-  // Playback
   function step(ts){
     if(!state.playing) return;
     if(state.lastFrame===null) state.lastFrame=ts;
@@ -604,9 +589,7 @@
       requestAnimationFrame(step);
     }
   });
-
   el.btnPause.addEventListener("click", ()=>{ state.playing=false; });
-
   el.btnFade.addEventListener("click", ()=>{
     state.fadeEnabled=!state.fadeEnabled;
     updateFadeButton();
@@ -619,13 +602,34 @@
     el.timeLabel.textContent=formatTimeLabel(state.currentIdx);
     redraw(state.currentIdx);
   });
-
   el.logSelect.addEventListener("change", loadSelectedLog);
 
-  // Init
-  el.insightsBody.innerHTML = `<div class="muted">Load a session to see stats.</div>`;
-  resizeCanvas();
-  clear();
-  el.timeLabel.textContent=formatTimeLabel(0);
-  populateLogDropdown();
+  // toggles
+  el.btnToggleInsights.addEventListener("click", ()=>{
+    el.insights.classList.toggle("hidden");
+  });
+  el.btnToggleLegend.addEventListener("click", ()=>{
+    el.legend.classList.toggle("hidden");
+  });
+  el.toggleInstructions.addEventListener("click", (e)=>{
+    e.preventDefault();
+    el.instructions.classList.toggle("hidden");
+  });
+
+  // defaults
+  el.instructions.classList.add("hidden");
+  el.insights.classList.remove("hidden");
+  el.legend.classList.remove("hidden");
+
+  function init(){
+    resizeCanvas();
+    clear();
+    el.timeLabel.textContent=formatTimeLabel(0);
+    populateLogDropdown();
+  }
+  init();
+
+  window.addEventListener("resize", resizeCanvas);
+  map.on("resize", resizeCanvas);
+  map.on("move zoom", ()=>redraw(state.currentIdx));
 })();

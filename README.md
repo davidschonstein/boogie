@@ -1,7 +1,11 @@
-# Surf Foil Session Map (GitHub Pages + /logs dropdown + insights)
+# Surf Foil Session Map — mobile + toggles
 
-Includes:
-- Speed options: 1×, 4×, 8×, 16×
-- Nav mode 7 (green) labels show distance + duration
-- Insights panel: wave count, top 10 distances, towing vs on-foil distance/time, total session time
-- Dropdown labels are prettified from filenames when possible
+Changes in this version:
+- Insights label rename:
+  - “Total distance on waves” / “Total time on waves”
+  - Removed “(nav mode 1)” from towing labels
+- Mobile optimizations:
+  - Playback panel is compact; Instructions collapsed by default (tap “Instructions”)
+  - Layers control moved to top-left and collapsed; playback panel is top-right (no overlap)
+  - Insights + Legend visible on mobile with toggle buttons (shown by default)
+  - Legend smaller footprint
