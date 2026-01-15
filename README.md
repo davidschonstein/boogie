@@ -1,6 +1,7 @@
-# Surf Foil Session Map — mobile panels fix
+# Surf Foil Session Map — v5 updates
 
-This version:
-- Prevents the playback panel from overlapping Leaflet zoom/layers on mobile by reserving a left 'safe gutter'.
-- Makes Insights a full-width bottom sheet on mobile (no horizontal overflow).
-- Sets Insights + Legend hidden by default (toggle buttons show them).
+- Fade horizon set to 3 minutes.
+- Boogie overlay is ON by default.
+- Session dropdown labels treat filename timestamps as UTC and display in local time.
+- Top 10 waves list shows distance + duration + max speed.
+- Instructions text updated.

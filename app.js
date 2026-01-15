@@ -2,7 +2,7 @@
   "use strict";
 
   const DT_MS = 200;               // default 5 Hz fallback
-  const FADE_OUT_MS = 600_000;     // 10 minutes
+  const FADE_OUT_MS = 180_000;     // 3 minutes
   const SURF_MODE_SET = new Set(["7", "7.0"]);
   const TOW_MODE_SET  = new Set(["1", "1.0"]);
   const LOGS_DIR = "logs";
@@ -69,7 +69,7 @@
   const state = {
     loaded: false,
     fadeEnabled: true,
-    boogieEnabled: false,
+    boogieEnabled: true, // default ON
     currentIdx: 0,
     playing: false,
     accMs: 0,
@@ -145,7 +145,7 @@
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
   }
 
-  // Points: fill only (no black border) to keep colors readable
+  // fill-only points (no black border)
   function drawPoint(lat, lon, color, a, r=3.3){
     if(a<=0) return;
     const [x,y]=project(lat, lon);
@@ -180,7 +180,6 @@
     if(!state.loaded || idx<=0) return;
     const start = state.fadeEnabled ? Math.max(0, idx - fadeN) : 0;
 
-    // rider segments/points (color-coded by nav mode)
     for(let i=start+1;i<=idx;i++){
       const a = alphaFor(i, idx);
       const color = state.modeColors[state.modes[i-1]] || "#000";
@@ -190,7 +189,6 @@
       drawPoint(state.lats[i], state.lons[i], state.modeColors[state.modes[i]] || "#000", alphaFor(i, idx), 3.3);
     }
 
-    // boogie overlay (single color)
     if(state.boogieEnabled){
       for(let i=start+1;i<=idx;i++){
         if(!state.boogieValid[i-1] || !state.boogieValid[i]) continue;
@@ -202,17 +200,11 @@
       }
     }
 
-    // wave labels at nav mode 7 run end
     for(let i=start;i<=idx;i++){
       const st = state.surfEndToStats[i];
       if(st){
         const a = alphaFor(i,idx);
-        drawLabel(
-          state.lats[i],
-          state.lons[i],
-          `${Math.round(st.distM)} m • ${fmtMMSS(st.durMs)} • ${st.maxKmh.toFixed(1)} km/h`,
-          a
-        );
+        drawLabel(state.lats[i], state.lons[i], `${Math.round(st.distM)} m • ${fmtMMSS(st.durMs)} • ${st.maxKmh.toFixed(1)} km/h`, a);
       }
     }
   }
@@ -232,8 +224,6 @@
     return s ? s : "unknown";
   }
 
-  // If timestamp looks like ISO WITHOUT timezone (no Z / +/-),
-  // treat it as UTC by appending 'Z' so it displays correctly in local time (Ocean City, NJ).
   function normalizeTimeString(s){
     const t = String(s ?? "").trim();
     if(!t) return "";
@@ -253,7 +243,6 @@
     const ok=parsed.filter(x=>!isNaN(x)).length;
     if(ok>=Math.max(5, Math.floor(times.length*0.5))) return {parsed, ok:true};
 
-    // numeric fallback
     parsed = times.map(x=>{
       const n=Number(x);
       if(!isFinite(n)) return NaN;
@@ -301,7 +290,6 @@
   }
 
   function renderLegend(){
-    // Tracks section
     el.legendTracks.innerHTML = "";
     const makeItem = (label, color) => {
       const item=document.createElement("div");
@@ -317,7 +305,6 @@
     el.legendTracks.appendChild(makeItem("Rider", "#111"));
     el.legendTracks.appendChild(makeItem("Boogie", BOOGIE_COLOR));
 
-    // Nav modes section
     el.legendItems.innerHTML="";
     for(const mode of state.uniqueModes){
       const item=document.createElement("div");
@@ -369,7 +356,7 @@
     const towRuns  = segmentRunsByMode(TOW_MODE_SET);
 
     const numWaves = waveRuns.filter(r => r.endIdx > r.startIdx).length;
-    const top10 = [...waveRuns].map(r => r.distM).sort((a,b)=>b-a).slice(0,10);
+    const top10 = [...waveRuns].sort((a,b)=>b.distM-a.distM).slice(0,10);
 
     const totalDistWaves = waveRuns.reduce((a,r)=>a+r.distM,0);
 
@@ -391,7 +378,6 @@
       sessionMs = (state.modes.length-1) * state.dtMs;
     }
 
-    // max speed on waves (nav mode 7)
     let maxSpeedWaves = 0;
     for(let i=0;i<state.modes.length;i++){
       if(SURF_MODE_SET.has(state.modes[i]) && isFinite(state.speeds[i])){
@@ -419,12 +405,16 @@
     ];
 
     const topList = ins.top10.length
-      ? `<ol class="insights-list">${ins.top10.map(d=>`<li>${Math.round(d)} m</li>`).join("")}</ol>`
+      ? `<ol class="insights-list">${
+          ins.top10.map(r =>
+            `<li>${Math.round(r.distM)} m • ${fmtMMSS(r.durMs)} • ${r.maxKmh.toFixed(1)} km/h</li>`
+          ).join("")
+        }</ol>`
       : `<div class="muted">No nav mode 7 runs found.</div>`;
 
     el.insightsBody.innerHTML =
       rows.map(([k,v]) => `<div class="insights-row"><span>${k}</span><span class="mono">${v}</span></div>`).join("") +
-      `<div style="margin-top:10px;"><div style="font-weight:600;">Top 10 waves (distance)</div>${topList}</div>`;
+      `<div style="margin-top:10px;"><div style="font-weight:600;">Top 10 waves</div>${topList}</div>`;
   }
 
   function ingestRows(rows){
@@ -437,13 +427,10 @@
       if(lat<-90||lat>90||lon<-180||lon>180) continue;
       if(lat===0&&lon===0) continue;
 
-      const mode = normalizeMode(r["nav mode"]);
-
-      // speed (km/h)
+      const mode = String(r["nav mode"] ?? "").trim() || "unknown";
       const sp = Number(r["remote gps speed"]);
       const speedKmh = isFinite(sp) ? sp : NaN;
 
-      // boogie
       const blat = Number(r["boogie gps lat"]);
       const blon = Number(r["boogie gps lon"]);
       const bvalid = (isFinite(blat) && isFinite(blon) && blat>=-90 && blat<=90 && blon>=-180 && blon<=180 && !(blat===0 && blon===0));
@@ -498,7 +485,6 @@
     for(const m of state.modes){ if(!seen.has(m)){ seen.add(m); state.uniqueModes.push(m); } }
     state.modeColors = assignColors(state.uniqueModes);
 
-    // labels at end of nav 7 runs
     state.surfEndToStats = {};
     const waveRuns = segmentRunsByMode(SURF_MODE_SET);
     for(const r of waveRuns){
@@ -509,11 +495,9 @@
 
     renderLegend();
 
-    // insights
     const ins = computeInsights();
     renderInsights(ins);
 
-    // fit to rider track
     const latlngs=state.lats.map((lat,k)=>[lat,state.lons[k]]);
     map.fitBounds(L.latLngBounds(latlngs), {padding:[20,20]});
 
@@ -536,9 +520,7 @@
       header:true,
       skipEmptyLines:true,
       dynamicTyping:false,
-      complete:(results)=>{
-        ingestRows(results.data||[]);
-      }
+      complete:(results)=> ingestRows(results.data||[])
     });
   }
 
@@ -560,7 +542,6 @@
     return null;
   }
 
-  // Improved prettifier: scans for the LAST date/time pattern in the filename
   function prettyLogLabel(filename){
     const base = filename.replace(/\.csv$/i, "");
     const re = /(\d{4})[-_](\d{1,2})[-_](\d{1,2})[T _-](\d{1,2})[:_-](\d{1,2})(?:[:_-](\d{1,2}))?/g;
@@ -572,7 +553,7 @@
       }
     }
     if(best){
-      const dt = new Date(best.y, best.mo, best.d, best.hh, best.mm, best.ss);
+      const dt = new Date(Date.UTC(best.y, best.mo, best.d, best.hh, best.mm, best.ss));
       const datePart = dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
       const timePart = dt.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit" });
       return `${datePart} ${timePart}`;
@@ -610,9 +591,8 @@
     setStatus("Loading logs…");
     el.logSelect.innerHTML = `<option value="">Loading…</option>`;
     let files=[];
-    try {
-      files = await listLogsViaGitHubAPI();
-    } catch(e){
+    try { files = await listLogsViaGitHubAPI(); }
+    catch(e){
       el.logSelect.innerHTML = `<option value="">(No logs)</option>`;
       setStatus("Could not list /logs");
       return;
@@ -704,18 +684,10 @@
   });
   el.logSelect.addEventListener("change", loadSelectedLog);
 
-  el.btnToggleInsights.addEventListener("click", ()=>{
-    el.insights.classList.toggle("hidden");
-  });
-  el.btnToggleLegend.addEventListener("click", ()=>{
-    el.legend.classList.toggle("hidden");
-  });
-  el.toggleInstructions.addEventListener("click", (e)=>{
-    e.preventDefault();
-    el.instructions.classList.toggle("hidden");
-  });
+  el.btnToggleInsights.addEventListener("click", ()=> el.insights.classList.toggle("hidden"));
+  el.btnToggleLegend.addEventListener("click", ()=> el.legend.classList.toggle("hidden"));
+  el.toggleInstructions.addEventListener("click", (e)=>{ e.preventDefault(); el.instructions.classList.toggle("hidden"); });
 
-  // defaults requested
   el.instructions.classList.add("hidden");
   el.insights.classList.add("hidden");
   el.legend.classList.add("hidden");
