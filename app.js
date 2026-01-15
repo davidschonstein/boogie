@@ -7,6 +7,9 @@
   const TOW_MODE_SET  = new Set(["1", "1.0"]);
   const LOGS_DIR = "logs";
 
+  // boogie overlay style (independent of nav mode)
+  const BOOGIE_COLOR = "#ff00aa";
+
   const TILE_LAYERS = [
     { name: "Streets (OSM)", layer: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }) },
@@ -26,12 +29,14 @@
     btnPlay: document.getElementById("btnPlay"),
     btnPause: document.getElementById("btnPause"),
     btnFade: document.getElementById("btnFade"),
+    btnBoogie: document.getElementById("btnBoogie"),
     selSpeed: document.getElementById("selSpeed"),
     slider: document.getElementById("timeSlider"),
     timeLabel: document.getElementById("timeLabel"),
     logSelect: document.getElementById("logSelect"),
     legend: document.getElementById("legend"),
     legendItems: document.getElementById("legendItems"),
+    legendTracks: document.getElementById("legendTracks"),
     insights: document.getElementById("insights"),
     insightsBody: document.getElementById("insightsBody"),
     btnToggleInsights: document.getElementById("btnToggleInsights"),
@@ -64,12 +69,18 @@
   const state = {
     loaded: false,
     fadeEnabled: true,
+    boogieEnabled: false,
     currentIdx: 0,
     playing: false,
     accMs: 0,
     lastFrame: null,
 
-    lats: [], lons: [], modes: [],
+    // rider/remote track
+    lats: [], lons: [], modes: [], speeds: [],
+
+    // boogie track (same sample index, but can be invalid per-row)
+    boogieLats: [], boogieLons: [], boogieValid: [],
+
     timesMs: null,
     startEpochMs: 0,
     dtMs: DT_MS,
@@ -81,7 +92,12 @@
     el.btnFade.textContent = state.fadeEnabled ? "Fade On" : "Fade Off";
     el.btnFade.style.opacity = state.fadeEnabled ? "1.0" : "0.85";
   }
+  function updateBoogieButton(){
+    el.btnBoogie.textContent = state.boogieEnabled ? "Boogie On" : "Boogie Off";
+    el.btnBoogie.style.opacity = state.boogieEnabled ? "1.0" : "0.85";
+  }
   updateFadeButton();
+  updateBoogieButton();
 
   function toRad(x){ return x*Math.PI/180; }
   function haversineM(lat1, lon1, lat2, lon2){
@@ -114,34 +130,33 @@
     return 1 - (age/fadeN);
   }
 
-  function project(i){
-    const p=map.latLngToContainerPoint([state.lats[i], state.lons[i]]);
+  function project(lat, lon){
+    const p=map.latLngToContainerPoint([lat, lon]);
     return [p.x, p.y];
   }
 
   function clear(){ ctx.clearRect(0,0,canvas.width,canvas.height); }
 
-  function drawSegment(i0,i1,a){
+  function drawSegment(lat0, lon0, lat1, lon1, color, a, width=3){
     if(a<=0) return;
-    const [x0,y0]=project(i0), [x1,y1]=project(i1);
-    const color=state.modeColors[state.modes[i0]] || "#000";
+    const [x0,y0]=project(lat0, lon0), [x1,y1]=project(lat1, lon1);
     ctx.globalAlpha=a;
-    ctx.strokeStyle=color; ctx.lineWidth=3; ctx.lineCap="round";
+    ctx.strokeStyle=color; ctx.lineWidth=width; ctx.lineCap="round";
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
   }
 
-  function drawPoint(i,a){
+  // Points: fill only (no black border) to keep colors readable
+  function drawPoint(lat, lon, color, a, r=3.3){
     if(a<=0) return;
-    const [x,y]=project(i);
-    const color=state.modeColors[state.modes[i]] || "#000";
+    const [x,y]=project(lat, lon);
     ctx.globalAlpha=a;
-    ctx.fillStyle=color; ctx.strokeStyle="#111"; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.arc(x,y,3.3,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=color;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
   }
 
-  function drawLabel(i,text,a){
+  function drawLabel(lat, lon, text, a){
     if(a<=0) return;
-    const [x,y]=project(i);
+    const [x,y]=project(lat, lon);
     ctx.globalAlpha=a;
     ctx.font="12px ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial";
     ctx.textBaseline="middle"; ctx.textAlign="left";
@@ -165,14 +180,39 @@
     if(!state.loaded || idx<=0) return;
     const start = state.fadeEnabled ? Math.max(0, idx - fadeN) : 0;
 
-    for(let i=start+1;i<=idx;i++) drawSegment(i-1,i,alphaFor(i,idx));
-    for(let i=start;i<=idx;i++) drawPoint(i,alphaFor(i,idx));
+    // rider segments/points (color-coded by nav mode)
+    for(let i=start+1;i<=idx;i++){
+      const a = alphaFor(i, idx);
+      const color = state.modeColors[state.modes[i-1]] || "#000";
+      drawSegment(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i], color, a, 3);
+    }
+    for(let i=start;i<=idx;i++){
+      drawPoint(state.lats[i], state.lons[i], state.modeColors[state.modes[i]] || "#000", alphaFor(i, idx), 3.3);
+    }
 
+    // boogie overlay (single color)
+    if(state.boogieEnabled){
+      for(let i=start+1;i<=idx;i++){
+        if(!state.boogieValid[i-1] || !state.boogieValid[i]) continue;
+        drawSegment(state.boogieLats[i-1], state.boogieLons[i-1], state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 2.5);
+      }
+      for(let i=start;i<=idx;i++){
+        if(!state.boogieValid[i]) continue;
+        drawPoint(state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 2.6);
+      }
+    }
+
+    // wave labels at nav mode 7 run end
     for(let i=start;i<=idx;i++){
       const st = state.surfEndToStats[i];
       if(st){
         const a = alphaFor(i,idx);
-        drawLabel(i, `${Math.round(st.distM)} m • ${fmtMMSS(st.durMs)}`, a);
+        drawLabel(
+          state.lats[i],
+          state.lons[i],
+          `${Math.round(st.distM)} m • ${fmtMMSS(st.durMs)} • ${st.maxKmh.toFixed(1)} km/h`,
+          a
+        );
       }
     }
   }
@@ -192,9 +232,20 @@
     return s ? s : "unknown";
   }
 
+  // If timestamp looks like ISO WITHOUT timezone (no Z / +/-),
+  // treat it as UTC by appending 'Z' so it displays correctly in local time (Ocean City, NJ).
+  function normalizeTimeString(s){
+    const t = String(s ?? "").trim();
+    if(!t) return "";
+    const hasTZ = /[zZ]$|[+-]\d{2}:\d{2}$/.test(t);
+    const isoNoTZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(t);
+    if(isoNoTZ && !hasTZ) return t + "Z";
+    return t;
+  }
+
   function parseTimeColumn(times){
     let parsed = times.map(x=>{
-      const s=(x===null||x===undefined)?"":String(x).trim();
+      const s=normalizeTimeString(x);
       if(!s) return NaN;
       const t=Date.parse(s);
       return isNaN(t)?NaN:t;
@@ -202,6 +253,7 @@
     const ok=parsed.filter(x=>!isNaN(x)).length;
     if(ok>=Math.max(5, Math.floor(times.length*0.5))) return {parsed, ok:true};
 
+    // numeric fallback
     parsed = times.map(x=>{
       const n=Number(x);
       if(!isFinite(n)) return NaN;
@@ -249,6 +301,23 @@
   }
 
   function renderLegend(){
+    // Tracks section
+    el.legendTracks.innerHTML = "";
+    const makeItem = (label, color) => {
+      const item=document.createElement("div");
+      item.className="legend-item";
+      const sw=document.createElement("span");
+      sw.className="swatch";
+      sw.style.background=color;
+      const txt=document.createElement("span");
+      txt.textContent=label;
+      item.appendChild(sw); item.appendChild(txt);
+      return item;
+    };
+    el.legendTracks.appendChild(makeItem("Rider", "#111"));
+    el.legendTracks.appendChild(makeItem("Boogie", BOOGIE_COLOR));
+
+    // Nav modes section
     el.legendItems.innerHTML="";
     for(const mode of state.uniqueModes){
       const item=document.createElement("div");
@@ -280,14 +349,17 @@
       if(!targetSet.has(state.modes[i])){ i++; continue; }
       const start=i;
       let dist=0;
+      let maxKmh = -Infinity;
+      maxKmh = Math.max(maxKmh, isFinite(state.speeds[i]) ? state.speeds[i] : -Infinity);
       i++;
       while(i<n && targetSet.has(state.modes[i])){
         dist += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
+        if(isFinite(state.speeds[i])) maxKmh = Math.max(maxKmh, state.speeds[i]);
         i++;
       }
       const end=i-1;
       const durMs = durationBetweenIdx(start, end);
-      runs.push({startIdx:start, endIdx:end, distM:dist, durMs});
+      runs.push({startIdx:start, endIdx:end, distM:dist, durMs, maxKmh: isFinite(maxKmh) ? maxKmh : 0});
     }
     return runs;
   }
@@ -319,7 +391,15 @@
       sessionMs = (state.modes.length-1) * state.dtMs;
     }
 
-    return { numWaves, top10, totalDistWaves, totalDistTow, totalTimeWaves, totalTimeTow, sessionMs };
+    // max speed on waves (nav mode 7)
+    let maxSpeedWaves = 0;
+    for(let i=0;i<state.modes.length;i++){
+      if(SURF_MODE_SET.has(state.modes[i]) && isFinite(state.speeds[i])){
+        maxSpeedWaves = Math.max(maxSpeedWaves, state.speeds[i]);
+      }
+    }
+
+    return { numWaves, top10, totalDistWaves, totalDistTow, totalTimeWaves, totalTimeTow, sessionMs, maxSpeedWaves };
   }
 
   function renderInsights(ins){
@@ -332,6 +412,7 @@
       ["No. of waves", String(ins.numWaves)],
       ["Total distance on waves", `${Math.round(ins.totalDistWaves)} m`],
       ["Total time on waves", fmtHHMMSS(ins.totalTimeWaves)],
+      ["Max speed on waves", `${ins.maxSpeedWaves.toFixed(1)} km/h`],
       ["Total distance towing", `${Math.round(ins.totalDistTow)} m`],
       ["Total time towing", fmtHHMMSS(ins.totalTimeTow)],
       ["Total session time", fmtHHMMSS(ins.sessionMs)],
@@ -355,7 +436,25 @@
       if(!isFinite(lat)||!isFinite(lon)) continue;
       if(lat<-90||lat>90||lon<-180||lon>180) continue;
       if(lat===0&&lon===0) continue;
-      cleaned.push({lat, lon, mode: normalizeMode(r["nav mode"]), time: r["boogie gps time"]});
+
+      const mode = normalizeMode(r["nav mode"]);
+
+      // speed (km/h)
+      const sp = Number(r["remote gps speed"]);
+      const speedKmh = isFinite(sp) ? sp : NaN;
+
+      // boogie
+      const blat = Number(r["boogie gps lat"]);
+      const blon = Number(r["boogie gps lon"]);
+      const bvalid = (isFinite(blat) && isFinite(blon) && blat>=-90 && blat<=90 && blon>=-180 && blon<=180 && !(blat===0 && blon===0));
+
+      cleaned.push({
+        lat, lon, mode, time: r["boogie gps time"],
+        speedKmh,
+        boogieLat: bvalid ? blat : NaN,
+        boogieLon: bvalid ? blon : NaN,
+        boogieValid: bvalid
+      });
     }
     if(cleaned.length<2){
       setStatus("Not enough valid GPS points.");
@@ -386,6 +485,12 @@
     state.lats=cleaned.map(x=>Math.round(x.lat*1e6)/1e6);
     state.lons=cleaned.map(x=>Math.round(x.lon*1e6)/1e6);
     state.modes=cleaned.map(x=>x.mode);
+    state.speeds=cleaned.map(x=>x.speedKmh);
+
+    state.boogieLats=cleaned.map(x=>x.boogieLat);
+    state.boogieLons=cleaned.map(x=>x.boogieLon);
+    state.boogieValid=cleaned.map(x=>x.boogieValid);
+
     state.timesMs = timesMsSorted;
     state.dtMs = computeMedianDt(state.timesMs);
 
@@ -393,19 +498,22 @@
     for(const m of state.modes){ if(!seen.has(m)){ seen.add(m); state.uniqueModes.push(m); } }
     state.modeColors = assignColors(state.uniqueModes);
 
+    // labels at end of nav 7 runs
     state.surfEndToStats = {};
     const waveRuns = segmentRunsByMode(SURF_MODE_SET);
     for(const r of waveRuns){
       if(r.endIdx > r.startIdx){
-        state.surfEndToStats[r.endIdx] = {distM: r.distM, durMs: r.durMs};
+        state.surfEndToStats[r.endIdx] = {distM: r.distM, durMs: r.durMs, maxKmh: r.maxKmh};
       }
     }
 
     renderLegend();
 
+    // insights
     const ins = computeInsights();
     renderInsights(ins);
 
+    // fit to rider track
     const latlngs=state.lats.map((lat,k)=>[lat,state.lons[k]]);
     map.fitBounds(L.latLngBounds(latlngs), {padding:[20,20]});
 
@@ -452,23 +560,36 @@
     return null;
   }
 
+  // Improved prettifier: scans for the LAST date/time pattern in the filename
   function prettyLogLabel(filename){
     const base = filename.replace(/\.csv$/i, "");
-    let m = base.match(/(20\\d{2})[-_](\\d{1,2})[-_](\\d{1,2})[T _-](\\d{1,2})[:_-](\\d{1,2})(?:[:_-](\\d{1,2}))?/);
-    if (m){
-      const y = Number(m[1]), mo = Number(m[2])-1, d = Number(m[3]);
-      const hh = Number(m[4]), mm = Number(m[5]), ss = Number(m[6]||"0");
-      const dt = new Date(y, mo, d, hh, mm, ss);
+    const re = /(\d{4})[-_](\d{1,2})[-_](\d{1,2})[T _-](\d{1,2})[:_-](\d{1,2})(?:[:_-](\d{1,2}))?/g;
+    let m, best=null;
+    while((m = re.exec(base)) !== null){
+      const y=+m[1], mo=+m[2]-1, d=+m[3], hh=+m[4], mm=+m[5], ss=+(m[6]||"0");
+      if(hh>=0 && hh<24 && mm>=0 && mm<60 && ss>=0 && ss<60){
+        best={y,mo,d,hh,mm,ss, idx:m.index};
+      }
+    }
+    if(best){
+      const dt = new Date(best.y, best.mo, best.d, best.hh, best.mm, best.ss);
       const datePart = dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
       const timePart = dt.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit" });
       return `${datePart} ${timePart}`;
     }
-    m = base.match(/(20\\d{2})[-_](\\d{1,2})[-_](\\d{1,2})/);
-    if (m){
-      const dt = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+
+    const re2 = /(\d{4})[-_](\d{1,2})[-_](\d{1,2})/g;
+    let best2=null;
+    while((m = re2.exec(base)) !== null){
+      const y=+m[1], mo=+m[2]-1, d=+m[3];
+      best2={y,mo,d, idx:m.index};
+    }
+    if(best2){
+      const dt = new Date(best2.y, best2.mo, best2.d);
       return dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
     }
-    return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\\s+/g, " ").trim();
+
+    return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\s+/g, " ").trim();
   }
 
   async function listLogsViaGitHubAPI(){
@@ -562,9 +683,16 @@
     }
   });
   el.btnPause.addEventListener("click", ()=>{ state.playing=false; });
+
   el.btnFade.addEventListener("click", ()=>{
     state.fadeEnabled=!state.fadeEnabled;
     updateFadeButton();
+    redraw(state.currentIdx);
+  });
+
+  el.btnBoogie.addEventListener("click", ()=>{
+    state.boogieEnabled=!state.boogieEnabled;
+    updateBoogieButton();
     redraw(state.currentIdx);
   });
 
@@ -596,6 +724,7 @@
     resizeCanvas();
     clear();
     el.timeLabel.textContent=formatTimeLabel(0);
+    renderLegend();
     populateLogDropdown();
   }
   init();
