@@ -7,13 +7,6 @@
   const TOW_MODE_SET  = new Set(["1", "1.0"]);
   const LOGS_DIR = "logs";
 
-  const FORCE_COLORS = {
-    "7":   "#00a000",
-    "7.0": "#00a000",
-    "1":   "#377eb8",
-    "1.0": "#377eb8"
-  };
-
   const TILE_LAYERS = [
     { name: "Streets (OSM)", layer: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }) },
@@ -56,7 +49,6 @@
   L.control.layers(baseLayers, null, { collapsed: true, position: "topleft" }).addTo(map);
 
   const canvas = document.createElement("canvas");
-  canvas.id = "trackCanvas";
   canvas.style.position = "absolute";
   canvas.style.top = "0";
   canvas.style.left = "0";
@@ -83,8 +75,6 @@
     dtMs: DT_MS,
     modeColors: {}, uniqueModes: [],
     surfEndToStats: {},
-
-    insights: null,
   };
 
   function updateFadeButton() {
@@ -244,20 +234,16 @@
   function assignColors(uniqueModes){
     const colors = {};
     const used = new Set();
+    const FORCE = { "7":"#00a000","7.0":"#00a000","1":"#377eb8","1.0":"#377eb8" };
     for(const m of uniqueModes){
-      if(FORCE_COLORS[m]){
-        colors[m]=FORCE_COLORS[m];
-        used.add(FORCE_COLORS[m]);
-      }
+      if(FORCE[m]){ colors[m]=FORCE[m]; used.add(FORCE[m]); }
     }
     let pi=0;
     for(const m of uniqueModes){
       if(colors[m]) continue;
       while(pi<PALETTE.length && used.has(PALETTE[pi])) pi++;
       const c = PALETTE[pi % PALETTE.length];
-      colors[m]=c;
-      used.add(c);
-      pi++;
+      colors[m]=c; used.add(c); pi++;
     }
     return colors;
   }
@@ -306,16 +292,6 @@
     return runs;
   }
 
-  function totalDistanceForModeSet(modeSet){
-    let dist=0;
-    for(let i=1;i<state.modes.length;i++){
-      if(modeSet.has(state.modes[i-1]) && modeSet.has(state.modes[i])){
-        dist += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
-      }
-    }
-    return dist;
-  }
-
   function computeInsights(){
     const waveRuns = segmentRunsByMode(SURF_MODE_SET);
     const towRuns  = segmentRunsByMode(TOW_MODE_SET);
@@ -324,7 +300,13 @@
     const top10 = [...waveRuns].map(r => r.distM).sort((a,b)=>b-a).slice(0,10);
 
     const totalDistWaves = waveRuns.reduce((a,r)=>a+r.distM,0);
-    const totalDistTow   = totalDistanceForModeSet(TOW_MODE_SET);
+
+    let totalDistTow = 0;
+    for(let i=1;i<state.modes.length;i++){
+      if(TOW_MODE_SET.has(state.modes[i-1]) && TOW_MODE_SET.has(state.modes[i])){
+        totalDistTow += haversineM(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i]);
+      }
+    }
 
     const totalTimeWaves = waveRuns.reduce((a,r)=>a+r.durMs,0);
     const totalTimeTow   = towRuns.reduce((a,r)=>a+r.durMs,0);
@@ -377,7 +359,7 @@
     }
     if(cleaned.length<2){
       setStatus("Not enough valid GPS points.");
-      state.loaded=false; state.insights=null; renderInsights(null); clear(); return;
+      state.loaded=false; clear(); return;
     }
 
     const timesRaw = cleaned.map(x=>x.time);
@@ -420,11 +402,12 @@
     }
 
     renderLegend();
+
+    const ins = computeInsights();
+    renderInsights(ins);
+
     const latlngs=state.lats.map((lat,k)=>[lat,state.lons[k]]);
     map.fitBounds(L.latLngBounds(latlngs), {padding:[20,20]});
-
-    state.insights = computeInsights();
-    renderInsights(state.insights);
 
     state.loaded=true;
     state.currentIdx=0;
@@ -446,7 +429,6 @@
       skipEmptyLines:true,
       dynamicTyping:false,
       complete:(results)=>{
-        if(results.errors && results.errors.length) console.warn("PapaParse errors:", results.errors);
         ingestRows(results.data||[]);
       }
     });
@@ -472,7 +454,7 @@
 
   function prettyLogLabel(filename){
     const base = filename.replace(/\.csv$/i, "");
-    let m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})[T _-](\d{1,2})[:_-](\d{1,2})(?:[:_-](\d{1,2}))?/);
+    let m = base.match(/(20\\d{2})[-_](\\d{1,2})[-_](\\d{1,2})[T _-](\\d{1,2})[:_-](\\d{1,2})(?:[:_-](\\d{1,2}))?/);
     if (m){
       const y = Number(m[1]), mo = Number(m[2])-1, d = Number(m[3]);
       const hh = Number(m[4]), mm = Number(m[5]), ss = Number(m[6]||"0");
@@ -481,12 +463,12 @@
       const timePart = dt.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit" });
       return `${datePart} ${timePart}`;
     }
-    m = base.match(/(20\d{2})[-_](\d{1,2})[-_](\d{1,2})/);
+    m = base.match(/(20\\d{2})[-_](\\d{1,2})[-_](\\d{1,2})/);
     if (m){
       const dt = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
       return dt.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
     }
-    return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\s+/g, " ").trim();
+    return base.replace(/[_]+/g, " ").replace(/[-]+/g, "-").replace(/\\s+/g, " ").trim();
   }
 
   async function listLogsViaGitHubAPI(){
@@ -510,7 +492,6 @@
     try {
       files = await listLogsViaGitHubAPI();
     } catch(e){
-      console.warn("Failed to list logs via GitHub API:", e);
       el.logSelect.innerHTML = `<option value="">(No logs)</option>`;
       setStatus("Could not list /logs");
       return;
@@ -531,15 +512,7 @@
       el.logSelect.appendChild(opt);
     }
 
-    const params=new URLSearchParams(window.location.search);
-    const wanted=params.get("log");
-    if(wanted){
-      const idx=files.findIndex(x=>x.name===wanted);
-      if(idx>=0) el.logSelect.selectedIndex=idx;
-    } else {
-      el.logSelect.selectedIndex=0;
-    }
-
+    el.logSelect.selectedIndex=0;
     await loadSelectedLog();
   }
 
@@ -553,7 +526,6 @@
       const text=await fetchText(url);
       loadCsvText(text);
     } catch(e){
-      console.error("Failed to load log:", e);
       setStatus(`Failed: ${e.message}`);
     }
   }
@@ -604,7 +576,6 @@
   });
   el.logSelect.addEventListener("change", loadSelectedLog);
 
-  // toggles
   el.btnToggleInsights.addEventListener("click", ()=>{
     el.insights.classList.toggle("hidden");
   });
@@ -616,10 +587,10 @@
     el.instructions.classList.toggle("hidden");
   });
 
-  // defaults
+  // defaults requested
   el.instructions.classList.add("hidden");
-  el.insights.classList.remove("hidden");
-  el.legend.classList.remove("hidden");
+  el.insights.classList.add("hidden");
+  el.legend.classList.add("hidden");
 
   function init(){
     resizeCanvas();

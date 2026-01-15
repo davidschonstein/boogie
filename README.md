@@ -1,11 +1,6 @@
-# Surf Foil Session Map — mobile + toggles
+# Surf Foil Session Map — mobile panels fix
 
-Changes in this version:
-- Insights label rename:
-  - “Total distance on waves” / “Total time on waves”
-  - Removed “(nav mode 1)” from towing labels
-- Mobile optimizations:
-  - Playback panel is compact; Instructions collapsed by default (tap “Instructions”)
-  - Layers control moved to top-left and collapsed; playback panel is top-right (no overlap)
-  - Insights + Legend visible on mobile with toggle buttons (shown by default)
-  - Legend smaller footprint
+This version:
+- Prevents the playback panel from overlapping Leaflet zoom/layers on mobile by reserving a left 'safe gutter'.
+- Makes Insights a full-width bottom sheet on mobile (no horizontal overflow).
+- Sets Insights + Legend hidden by default (toggle buttons show them).
