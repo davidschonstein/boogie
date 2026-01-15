@@ -23,6 +23,7 @@
         <button id="btnPlay" class="btn">▶</button>
         <button id="btnPause" class="btn">❚❚</button>
         <button id="btnFade" class="btn">Fade</button>
+        <button id="btnBoogie" class="btn">Boogie</button>
 
         <label class="label">Speed
           <select id="selSpeed" class="select">
@@ -60,7 +61,8 @@
 
     <div id="instructions" class="instructions hidden">
       Track starts blank. Hit <b>Play</b> or drag the slider. Fade horizon: <b>10 minutes</b> (toggle with Fade).
-      Nav mode <b>7</b> runs show <b>distance</b> + <b>duration</b> at the run end.
+      Nav mode <b>7</b> runs show <b>distance</b> + <b>duration</b> + <b>max speed</b> at the run end.
+      Toggle <b>Boogie</b> to overlay the towing device track.
     </div>
   </div>
 
@@ -72,7 +74,10 @@
   </div>
 
   <div id="legend" class="panel legend">
-    <div class="legend-title">Nav mode</div>
+    <div class="legend-title">Legend</div>
+    <div class="legend-section-title">Tracks</div>
+    <div id="legendTracks"></div>
+    <div class="legend-section-title" style="margin-top:10px;">Nav mode</div>
     <div id="legendItems"></div>
   </div>
 
