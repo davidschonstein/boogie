@@ -132,30 +132,54 @@
   }
 
   // ─── Video config: URL params (shareable) + localStorage (local) ───
-  // URL param ?v encodes a base64 JSON map: { logFilename: { id, delay }, ... }
-  // This allows one URL to carry video configs for all sessions.
+  // URL param ?v encodes a compact string: "dateKey:videoId:delay,dateKey2:videoId2:delay2"
+  // dateKey is extracted from the log filename (e.g. "2026-2-9") to keep URLs short.
 
-  /** Decode the ?v= param into a map of { logFilename: { id, delay } } */
+  /** Extract a short date key from a log filename, e.g. "2026-2-9" */
+  function logDateKey(filename){
+    if(!filename) return "";
+    // Match _logs_YYYY_M_D_ pattern
+    const m = filename.match(/_logs_(\d{4})_(\d{1,2})_(\d{1,2})_/);
+    if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+    // Fallback: match YYYY-MM-DD
+    const m2 = filename.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if(m2) return `${m2[1]}-${parseInt(m2[2])}-${parseInt(m2[3])}`;
+    return filename.slice(0, 16);
+  }
+
+  /** Decode the ?v= param. Format: "dateKey:videoId:delay,dateKey2:videoId2:delay2" */
   function getVideoConfigFromUrl(){
     const params = new URLSearchParams(window.location.search);
     const raw = params.get("v");
     if(!raw) return {};
-    try { return JSON.parse(atob(raw)); } catch(e){ return {}; }
+    const map = {};
+    for(const entry of raw.split(",")){
+      const parts = entry.split(":");
+      if(parts.length >= 2){
+        const key = parts[0];
+        const id = parts[1];
+        const delay = parts[2] || "";
+        if(key && id) map[key] = { id, delay };
+      }
+    }
+    return map;
   }
 
-  /** Encode the full video config map into the ?v= URL param */
+  /** Encode the config map into the ?v= URL param */
   function pushVideoConfigToUrl(configMap){
     const url = new URL(window.location);
-    const entries = Object.keys(configMap).length;
-    if(entries > 0){
-      url.searchParams.set("v", btoa(JSON.stringify(configMap)));
+    const entries = Object.entries(configMap);
+    if(entries.length > 0){
+      const str = entries.map(([k, v]) => {
+        return v.delay && v.delay !== "0" ? `${k}:${v.id}:${v.delay}` : `${k}:${v.id}`;
+      }).join(",");
+      url.searchParams.set("v", str);
     } else {
       url.searchParams.delete("v");
     }
     window.history.replaceState({}, "", url);
   }
 
-  /** Get the shared config map, merging URL state with the current save */
   function getFullVideoConfig(){
     return getVideoConfigFromUrl();
   }
@@ -166,9 +190,10 @@
 
     // Priority: URL params > localStorage
     const urlConfig = getVideoConfigFromUrl();
-    if(urlConfig[filename]){
-      el.youtubeUrl.value = urlConfig[filename].id || "";
-      el.videoDelay.value = urlConfig[filename].delay || "";
+    const dateKey = logDateKey(filename);
+    if(dateKey && urlConfig[dateKey]){
+      el.youtubeUrl.value = urlConfig[dateKey].id || "";
+      el.videoDelay.value = urlConfig[dateKey].delay || "";
     } else {
       const key = getYtStorageKey();
       el.youtubeUrl.value = key ? (localStorage.getItem(key) || "") : "";
@@ -197,11 +222,12 @@
 
     // Save to URL param (merge with existing config for other sessions)
     const config = getFullVideoConfig();
-    if(vidId){
-      config[filename] = { id: vidId };
-      if(delayVal && delayVal !== "0") config[filename].delay = delayVal;
-    } else {
-      delete config[filename];
+    const dateKey = logDateKey(filename);
+    if(vidId && dateKey){
+      config[dateKey] = { id: vidId };
+      if(delayVal && delayVal !== "0") config[dateKey].delay = delayVal;
+    } else if(dateKey){
+      delete config[dateKey];
     }
     pushVideoConfigToUrl(config);
   }
@@ -217,9 +243,10 @@
     destroyYtPlayer();
 
     // Remove from URL config
-    if(filename){
+    const dateKey = logDateKey(filename);
+    if(dateKey){
       const config = getFullVideoConfig();
-      delete config[filename];
+      delete config[dateKey];
       pushVideoConfigToUrl(config);
     }
   }
