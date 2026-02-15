@@ -293,7 +293,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   .map-column { flex: none; height: 40vh; }
   .sidebar {
     width: 100%;
-    flex: none;
+    flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -308,8 +308,8 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
     max-width: 120px;
     padding: 6px 10px;
     bottom: 8px;
-    right: 8px;
-    left: auto;
+    left: 8px;
+    right: auto;
     font-size: 10px;
     max-height: 150px;
   }
