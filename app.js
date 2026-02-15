@@ -38,12 +38,19 @@
     legendItems: document.getElementById("legendItems"),
     legendTracks: document.getElementById("legendTracks"),
     insights: document.getElementById("insights"),
-    insightsBody: document.getElementById("insightsBody"),
-    btnToggleInsights: document.getElementById("btnToggleInsights"),
-    btnToggleLegend: document.getElementById("btnToggleLegend"),
+    insightsStats: document.getElementById("insightsStats"),
+    top10Body: document.getElementById("top10Body"),
     status: document.getElementById("status"),
     toggleInstructions: document.getElementById("toggleInstructions"),
     instructions: document.getElementById("instructions"),
+    youtubeUrl: document.getElementById("youtubeUrl"),
+    videoDelay: document.getElementById("videoDelay"),
+    btnSaveYt: document.getElementById("btnSaveYt"),
+    btnClearYt: document.getElementById("btnClearYt"),
+    videoPanel: document.getElementById("videoPanel"),
+    videoTitle: document.getElementById("videoTitle"),
+    noVideoOverlay: document.getElementById("noVideoOverlay"),
+    btnCloseVideo: document.getElementById("btnCloseVideo"),
   };
 
   function setStatus(msg) { el.status.textContent = msg ? msg : ""; }
@@ -86,7 +93,295 @@
     dtMs: DT_MS,
     modeColors: {}, uniqueModes: [],
     surfEndToStats: {},
+
+    // Video integration
+    top10Rides: [],        // [{startIdx, endIdx, distM, durMs, maxKmh}, ...]
+    activeVideoRide: -1,   // currently playing ride rank (1-based), -1 = none
+    currentLogFilename: "",
   };
+
+  // ─── YouTube integration ───────────────────────────────────────────
+
+  let ytPlayer = null;
+  let ytReady = !!(window.YT && window.YT.Player);
+
+  // The YouTube IFrame API calls this global function when ready
+  // (may have already fired before app.js loaded, so we also check above)
+  window.onYouTubeIframeAPIReady = function(){
+    ytReady = true;
+  };
+
+  function getYtStorageKey(){
+    return state.currentLogFilename ? `yt_${state.currentLogFilename}` : null;
+  }
+
+  function getDelayStorageKey(){
+    return state.currentLogFilename ? `ytdelay_${state.currentLogFilename}` : null;
+  }
+
+  function extractYouTubeId(input){
+    if(!input) return null;
+    input = input.trim();
+    if(/^[A-Za-z0-9_-]{11}$/.test(input)) return input;
+    let m = input.match(/(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  function getVideoDelay(){
+    return parseFloat(el.videoDelay.value) || 0;
+  }
+
+  function loadSavedYouTubeUrl(){
+    const key = getYtStorageKey();
+    if(!key) { el.youtubeUrl.value = ""; el.videoDelay.value = ""; return; }
+    el.youtubeUrl.value = localStorage.getItem(key) || "";
+    const delayKey = getDelayStorageKey();
+    el.videoDelay.value = delayKey ? (localStorage.getItem(delayKey) || "") : "";
+  }
+
+  function saveYouTubeUrl(){
+    const key = getYtStorageKey();
+    if(!key) return;
+    const val = el.youtubeUrl.value.trim();
+    if(val) localStorage.setItem(key, val);
+    else localStorage.removeItem(key);
+    const delayKey = getDelayStorageKey();
+    const delayVal = el.videoDelay.value.trim();
+    if(delayKey){
+      if(delayVal) localStorage.setItem(delayKey, delayVal);
+      else localStorage.removeItem(delayKey);
+    }
+  }
+
+  function clearYouTubeUrl(){
+    const key = getYtStorageKey();
+    if(key) localStorage.removeItem(key);
+    const delayKey = getDelayStorageKey();
+    if(delayKey) localStorage.removeItem(delayKey);
+    el.youtubeUrl.value = "";
+    el.videoDelay.value = "";
+    destroyYtPlayer();
+  }
+
+  function getActiveYouTubeId(){
+    return extractYouTubeId(el.youtubeUrl.value);
+  }
+
+  function ensureYtPlayer(videoId){
+    if(!ytReady) return false;
+    if(ytPlayer && ytPlayer._videoId === videoId) return true;
+    destroyYtPlayer();
+    ytPlayer = new YT.Player("ytPlayer", {
+      width: "100%",
+      height: "100%",
+      videoId: videoId,
+      playerVars: {
+        autoplay: 0,
+        controls: 0,          // hide YouTube controls — unified via app buttons
+        modestbranding: 1,
+        rel: 0,
+        disablekb: 1,         // disable keyboard shortcuts on player
+        vq: "hd2160",         // request 4K playback
+      },
+    });
+    ytPlayer._videoId = videoId;
+    return true;
+  }
+
+  function destroyYtPlayer(){
+    if(ytPlayer){
+      try { ytPlayer.destroy(); } catch(e){}
+      ytPlayer = null;
+    }
+    // Recreate the container div (YouTube replaces it with an iframe)
+    const container = document.getElementById("ytPlayer");
+    if(!container){
+      const div = document.createElement("div");
+      div.id = "ytPlayer";
+      const videoContainer = el.videoPanel.querySelector(".video-container");
+      if(videoContainer) videoContainer.insertBefore(div, el.noVideoOverlay);
+    }
+  }
+
+  /** Show/hide the "no video" overlay, with context-aware message */
+  function showNoVideoOverlay(show){
+    if(show){
+      el.noVideoOverlay.classList.remove("hidden");
+      if(getActiveYouTubeId()){
+        el.noVideoOverlay.textContent = "No video for this section";
+      } else {
+        el.noVideoOverlay.textContent = "No video — paste a YouTube URL above and click Save";
+      }
+    } else {
+      el.noVideoOverlay.classList.add("hidden");
+    }
+  }
+
+  /**
+   * Compute the start time (in seconds) of a given ride rank (1-based)
+   * within the combined YouTube video.
+   * Each clip = ride duration + 2*buffer (20s each side = 40s total).
+   * Clips are concatenated in rank order 1..10.
+   */
+  function computeYtSeekTime(rank){
+    const BUFFER = 20; // seconds each side
+    let cumulative = 0;
+    for(let i = 0; i < state.top10Rides.length && i < rank - 1; i++){
+      const r = state.top10Rides[i];
+      const rideDurSec = r.durMs / 1000;
+      cumulative += rideDurSec + 2 * BUFFER;
+    }
+    // Apply user delay offset
+    cumulative += getVideoDelay();
+    return Math.max(0, cumulative);
+  }
+
+  /** Pause YouTube player */
+  function pauseYtPlayer(){
+    try { if(ytPlayer && ytPlayer.pauseVideo) ytPlayer.pauseVideo(); } catch(e){}
+  }
+
+  /** Play YouTube player */
+  function playYtPlayer(){
+    try { if(ytPlayer && ytPlayer.playVideo) ytPlayer.playVideo(); } catch(e){}
+  }
+
+  /**
+   * Play a ride.
+   * @param {number} rank - 1-based ride rank
+   * @param {number} [scrubIdx] - if provided, resume from this scrubber index
+   *        instead of seeking the scrubber to the ride start.
+   */
+  function playRide(rank, scrubIdx){
+    const ride = state.top10Rides[rank - 1];
+    if(!ride || rank < 1 || rank > state.top10Rides.length) return;
+
+    // Track which ride is active (set before buffer so scrubber doesn't re-trigger)
+    state.activeVideoRide = rank;
+
+    if(scrubIdx == null){
+      // Clicked from top 10 list — seek scrubber to 20s before ride
+      const bufferSamples = Math.round(20000 / state.dtMs);
+      const mapIdx = Math.max(0, ride.startIdx - bufferSamples);
+      state.currentIdx = mapIdx;
+      el.slider.value = String(mapIdx);
+      el.timeLabel.textContent = formatTimeLabel(mapIdx);
+      redraw(mapIdx);
+    }
+    // else: scrubbing — scrubber is already at the right position
+
+    // Center map on the ride start position
+    const lat = state.lats[ride.startIdx];
+    const lon = state.lons[ride.startIdx];
+    if(isFinite(lat) && isFinite(lon)){
+      map.setView([lat, lon], Math.max(map.getZoom(), 16), {animate: true});
+    }
+
+    // Set speed to 1x for real-time sync and start map playback
+    el.selSpeed.value = "1";
+    state.playing = true;
+    state.lastFrame = null;
+    state.accMs = 0;
+    requestAnimationFrame(step);
+
+    // Play YouTube video if URL is saved
+    const videoId = getActiveYouTubeId();
+    if(videoId && ensureYtPlayer(videoId)){
+      // Compute seek: clip start + offset into clip based on scrubber position
+      let seekSec = computeYtSeekTime(rank);
+      if(scrubIdx != null){
+        const bufferSamples = Math.round(20000 / state.dtMs);
+        const clipStartIdx = Math.max(0, ride.startIdx - bufferSamples);
+        const offsetSamples = Math.max(0, scrubIdx - clipStartIdx);
+        seekSec += offsetSamples * state.dtMs / 1000;
+      }
+      el.videoTitle.textContent = `Ride #${rank}: ${Math.round(ride.distM)}m`;
+      showNoVideoOverlay(false);
+
+      const doSeek = () => {
+        try {
+          ytPlayer.seekTo(seekSec, true);
+          ytPlayer.playVideo();
+          try { ytPlayer.setPlaybackQuality("hd2160"); } catch(e){}
+        } catch(e){}
+      };
+      if(ytPlayer.seekTo) doSeek();
+      else setTimeout(doSeek, 1000);
+    }
+  }
+
+  /** Stop both map and video playback */
+  function stopPlayback(){
+    state.playing = false;
+    pauseYtPlayer();
+  }
+
+  function closeVideo(){
+    state.activeVideoRide = -1;
+    pauseYtPlayer();
+    showNoVideoOverlay(true);
+    el.videoTitle.textContent = "Video";
+  }
+
+  /**
+   * Check if the current scrubber index is within a top 10 ride (with buffer).
+   * Returns ride rank (1-based) or -1 if not in any ride.
+   */
+  const RIDE_TAIL_MS = 10000; // 10 seconds of playback after nav mode 7 ends
+
+  function rideAtIndex(idx){
+    const bufferSamples = Math.round(20000 / state.dtMs);
+    const tailSamples = Math.round(RIDE_TAIL_MS / state.dtMs);
+    for(let i = 0; i < state.top10Rides.length; i++){
+      const r = state.top10Rides[i];
+      const zoneStart = Math.max(0, r.startIdx - bufferSamples);
+      const zoneEnd = r.endIdx + tailSamples;
+      if(idx >= zoneStart && idx <= zoneEnd) return i + 1;
+    }
+    return -1;
+  }
+
+  /**
+   * Check if the scrubber has passed the end of the current ride's video zone.
+   * The video zone ends at endIdx + tail (10s after ride ends).
+   */
+  function isPastRideEnd(idx){
+    if(state.activeVideoRide < 1) return false;
+    const ride = state.top10Rides[state.activeVideoRide - 1];
+    if(!ride) return false;
+    const tailSamples = Math.round(RIDE_TAIL_MS / state.dtMs);
+    return idx > ride.endIdx + tailSamples;
+  }
+
+  function checkScrubberVideo(idx){
+    if(!getActiveYouTubeId()) return;
+
+    // Stop at end of ride clip
+    if(state.activeVideoRide > 0 && isPastRideEnd(idx)){
+      stopPlayback();
+      state.activeVideoRide = -1;
+      showNoVideoOverlay(true);
+      el.videoTitle.textContent = "Ride complete";
+      return;
+    }
+
+    const ride = rideAtIndex(idx);
+    if(ride > 0 && ride !== state.activeVideoRide){
+      // Entering a new ride zone — seek video to matching position
+      playRide(ride, idx);
+    } else if(ride < 0 && state.activeVideoRide > 0){
+      // Left a ride zone
+      state.activeVideoRide = -1;
+      pauseYtPlayer();
+      showNoVideoOverlay(true);
+      el.videoTitle.textContent = "Video";
+    } else if(ride < 0){
+      // Scrubbing outside any ride
+      showNoVideoOverlay(true);
+    }
+  }
+
+  // ─── End YouTube integration ──────────────────────────────────────
 
   function updateFadeButton() {
     el.btnFade.textContent = state.fadeEnabled ? "Fade On" : "Fade Off";
@@ -289,8 +584,11 @@
     return colors;
   }
 
+  const MODE_LABELS = {"7":"Surfing","7.0":"Surfing","1":"Towing","1.0":"Towing"};
+
   function renderLegend(){
     el.legendTracks.innerHTML = "";
+    el.legendItems.innerHTML = "";
     const makeItem = (label, color) => {
       const item=document.createElement("div");
       item.className="legend-item";
@@ -302,20 +600,10 @@
       item.appendChild(sw); item.appendChild(txt);
       return item;
     };
-    el.legendTracks.appendChild(makeItem("Rider", "#111"));
-    el.legendTracks.appendChild(makeItem("Boogie", BOOGIE_COLOR));
-
-    el.legendItems.innerHTML="";
+    // All items in one list for consistent spacing
+    el.legendItems.appendChild(makeItem("Boogie", BOOGIE_COLOR));
     for(const mode of state.uniqueModes){
-      const item=document.createElement("div");
-      item.className="legend-item";
-      const sw=document.createElement("span");
-      sw.className="swatch";
-      sw.style.background=state.modeColors[mode] || "#000";
-      const label=document.createElement("span");
-      label.textContent=mode;
-      item.appendChild(sw); item.appendChild(label);
-      el.legendItems.appendChild(item);
+      el.legendItems.appendChild(makeItem(MODE_LABELS[mode] || mode, state.modeColors[mode] || "#000"));
     }
   }
 
@@ -357,6 +645,7 @@
 
     const numWaves = waveRuns.filter(r => r.endIdx > r.startIdx).length;
     const top10 = [...waveRuns].sort((a,b)=>b.distM-a.distM).slice(0,10);
+    state.top10Rides = top10;
 
     const totalDistWaves = waveRuns.reduce((a,r)=>a+r.distM,0);
 
@@ -390,31 +679,50 @@
 
   function renderInsights(ins){
     if(!ins){
-      el.insightsBody.innerHTML = `<div class="muted">Load a session to see stats.</div>`;
+      el.insightsStats.innerHTML = `<div class="muted">Load a session to see stats.</div>`;
+      el.top10Body.innerHTML = `<div class="muted">Load a session.</div>`;
       return;
     }
 
     const rows = [
-      ["No. of waves", String(ins.numWaves)],
-      ["Total distance on waves", `${Math.round(ins.totalDistWaves)} m`],
-      ["Total time on waves", fmtHHMMSS(ins.totalTimeWaves)],
-      ["Max speed on waves", `${ins.maxSpeedWaves.toFixed(1)} km/h`],
-      ["Total distance towing", `${Math.round(ins.totalDistTow)} m`],
-      ["Total time towing", fmtHHMMSS(ins.totalTimeTow)],
-      ["Total session time", fmtHHMMSS(ins.sessionMs)],
+      ["Waves", String(ins.numWaves)],
+      ["Wave dist", `${Math.round(ins.totalDistWaves)} m`],
+      ["Wave time", fmtHHMMSS(ins.totalTimeWaves)],
+      ["Max speed", `${ins.maxSpeedWaves.toFixed(1)} km/h`],
+      ["Tow dist", `${Math.round(ins.totalDistTow)} m`],
+      ["Tow time", fmtHHMMSS(ins.totalTimeTow)],
+      ["Session", fmtHHMMSS(ins.sessionMs)],
     ];
 
-    const topList = ins.top10.length
-      ? `<ol class="insights-list">${
-          ins.top10.map(r =>
-            `<li>${Math.round(r.distM)} m • ${fmtMMSS(r.durMs)} • ${r.maxKmh.toFixed(1)} km/h</li>`
-          ).join("")
-        }</ol>`
-      : `<div class="muted">No nav mode 7 runs found.</div>`;
+    el.insightsStats.innerHTML = rows.map(([k,v]) =>
+      `<div class="insights-stat"><span>${k}</span><span class="mono-label">${v}</span></div>`
+    ).join("");
 
-    el.insightsBody.innerHTML =
-      rows.map(([k,v]) => `<div class="insights-row"><span>${k}</span><span class="mono">${v}</span></div>`).join("") +
-      `<div style="margin-top:10px;"><div style="font-weight:600;">Top 10 waves</div>${topList}</div>`;
+    if(ins.top10.length){
+      el.top10Body.innerHTML = `<ol class="top10-grid">${
+        ins.top10.map((r, i) => {
+          // Use same time source as the scrubber so timestamps match
+          const elapsedMs = r.startIdx * state.dtMs;
+          const timeStr = (state.startEpochMs > 0)
+            ? new Date(state.startEpochMs + elapsedMs).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+            : "";
+          const stats = `${Math.round(r.distM)}m ${fmtMMSS(r.durMs)} ${r.maxKmh.toFixed(1)}km/h`;
+          const timeTag = timeStr ? ` <span class="ride-time">${timeStr}</span>` : "";
+          return `<li><a href="#" class="ride-link" data-rank="${i+1}">${stats}${timeTag}</a></li>`;
+        }).join("")
+      }</ol>`;
+    } else {
+      el.top10Body.innerHTML = `<div class="muted">No nav mode 7 runs found.</div>`;
+    }
+
+    // Attach click handlers for ride links
+    el.top10Body.querySelectorAll(".ride-link").forEach(link => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const rank = parseInt(link.dataset.rank, 10);
+        playRide(rank);
+      });
+    });
   }
 
   function ingestRows(rows){
@@ -499,7 +807,10 @@
     renderInsights(ins);
 
     const latlngs=state.lats.map((lat,k)=>[lat,state.lons[k]]);
-    map.fitBounds(L.latLngBounds(latlngs), {padding:[20,20]});
+    const bounds = L.latLngBounds(latlngs);
+    map.fitBounds(bounds, {padding:[40,40], maxZoom: 19, animate: false});
+    // Zoom in 1 extra level beyond the auto-fit for a closer default view
+    map.setZoom(Math.min(map.getZoom() + 1, 19));
 
     state.loaded=true;
     state.currentIdx=0;
@@ -587,15 +898,38 @@
     return files;
   }
 
+  async function listLogsViaDirectoryListing(){
+    const resp = await fetch(`${LOGS_DIR}/`, {cache:"no-store"});
+    if(!resp.ok) throw new Error(`Directory listing HTTP ${resp.status}`);
+    const html = await resp.text();
+    // Parse .csv filenames from href attributes in the directory listing HTML
+    const re = /href="([^"]*\.csv)"/gi;
+    const files = [];
+    let m;
+    while((m = re.exec(html)) !== null){
+      let name = decodeURIComponent(m[1]);
+      // Strip any path prefix, keep just the filename
+      name = name.split("/").pop();
+      if(name) files.push({name, url: `${LOGS_DIR}/${name}`});
+    }
+    if(!files.length) throw new Error("No .csv found in directory listing");
+    files.sort((a,b)=>b.name.localeCompare(a.name));
+    return files;
+  }
+
   async function populateLogDropdown(){
     setStatus("Loading logs…");
     el.logSelect.innerHTML = `<option value="">Loading…</option>`;
     let files=[];
     try { files = await listLogsViaGitHubAPI(); }
     catch(e){
-      el.logSelect.innerHTML = `<option value="">(No logs)</option>`;
-      setStatus("Could not list /logs");
-      return;
+      // Fallback: try parsing a local directory listing (e.g. python http.server)
+      try { files = await listLogsViaDirectoryListing(); }
+      catch(e2){
+        el.logSelect.innerHTML = `<option value="">(No logs)</option>`;
+        setStatus("Could not list /logs");
+        return;
+      }
     }
 
     if(!files.length){
@@ -622,6 +956,8 @@
     if(!url) return;
     const opt = el.logSelect.options[el.logSelect.selectedIndex];
     const filename = opt?.dataset?.filename || "log";
+    state.currentLogFilename = filename;
+    loadSavedYouTubeUrl();
     setStatus(`Loading ${filename}…`);
     try{
       const text=await fetchText(url);
@@ -646,6 +982,7 @@
         el.slider.value=String(state.currentIdx);
         el.timeLabel.textContent=formatTimeLabel(state.currentIdx);
         redraw(state.currentIdx);
+        checkScrubberVideo(state.currentIdx);
       } else {
         state.playing=false;
         break;
@@ -660,9 +997,14 @@
       state.playing=true;
       state.lastFrame=null;
       requestAnimationFrame(step);
+      // Also resume YouTube if we're in a ride zone
+      if(state.activeVideoRide > 0) playYtPlayer();
     }
   });
-  el.btnPause.addEventListener("click", ()=>{ state.playing=false; });
+  el.btnPause.addEventListener("click", ()=>{
+    state.playing=false;
+    pauseYtPlayer();
+  });
 
   el.btnFade.addEventListener("click", ()=>{
     state.fadeEnabled=!state.fadeEnabled;
@@ -681,18 +1023,39 @@
     state.currentIdx=parseInt(el.slider.value||"0",10);
     el.timeLabel.textContent=formatTimeLabel(state.currentIdx);
     redraw(state.currentIdx);
+    checkScrubberVideo(state.currentIdx);
   });
-  el.logSelect.addEventListener("change", loadSelectedLog);
+  el.logSelect.addEventListener("change", ()=>{
+    state.activeVideoRide = -1;
+    closeVideo();
+    loadSelectedLog();
+  });
 
-  el.btnToggleInsights.addEventListener("click", ()=> el.insights.classList.toggle("hidden"));
-  el.btnToggleLegend.addEventListener("click", ()=> el.legend.classList.toggle("hidden"));
   el.toggleInstructions.addEventListener("click", (e)=>{ e.preventDefault(); el.instructions.classList.toggle("hidden"); });
 
+
+  el.btnSaveYt.addEventListener("click", ()=>{
+    saveYouTubeUrl();
+    // Re-render insights to update clickable links
+    if(state.loaded){
+      const ins = computeInsights();
+      renderInsights(ins);
+    }
+  });
+  el.btnClearYt.addEventListener("click", ()=>{
+    clearYouTubeUrl();
+    if(state.loaded){
+      const ins = computeInsights();
+      renderInsights(ins);
+    }
+  });
+  el.btnCloseVideo.addEventListener("click", closeVideo);
+
   el.instructions.classList.add("hidden");
-  el.insights.classList.add("hidden");
-  el.legend.classList.add("hidden");
 
   function init(){
+    // Map needs to know its container size in the flex layout
+    setTimeout(()=> map.invalidateSize(), 100);
     resizeCanvas();
     clear();
     el.timeLabel.textContent=formatTimeLabel(0);
