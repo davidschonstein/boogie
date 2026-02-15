@@ -131,29 +131,83 @@
     return parseFloat(el.videoDelay.value) || 0;
   }
 
+  // ─── Video config: URL params (shareable) + localStorage (local) ───
+  // URL param ?v encodes a base64 JSON map: { logFilename: { id, delay }, ... }
+  // This allows one URL to carry video configs for all sessions.
+
+  /** Decode the ?v= param into a map of { logFilename: { id, delay } } */
+  function getVideoConfigFromUrl(){
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("v");
+    if(!raw) return {};
+    try { return JSON.parse(atob(raw)); } catch(e){ return {}; }
+  }
+
+  /** Encode the full video config map into the ?v= URL param */
+  function pushVideoConfigToUrl(configMap){
+    const url = new URL(window.location);
+    const entries = Object.keys(configMap).length;
+    if(entries > 0){
+      url.searchParams.set("v", btoa(JSON.stringify(configMap)));
+    } else {
+      url.searchParams.delete("v");
+    }
+    window.history.replaceState({}, "", url);
+  }
+
+  /** Get the shared config map, merging URL state with the current save */
+  function getFullVideoConfig(){
+    return getVideoConfigFromUrl();
+  }
+
   function loadSavedYouTubeUrl(){
-    const key = getYtStorageKey();
-    if(!key) { el.youtubeUrl.value = ""; el.videoDelay.value = ""; return; }
-    el.youtubeUrl.value = localStorage.getItem(key) || "";
-    const delayKey = getDelayStorageKey();
-    el.videoDelay.value = delayKey ? (localStorage.getItem(delayKey) || "") : "";
+    const filename = state.currentLogFilename;
+    if(!filename){ el.youtubeUrl.value = ""; el.videoDelay.value = ""; return; }
+
+    // Priority: URL params > localStorage
+    const urlConfig = getVideoConfigFromUrl();
+    if(urlConfig[filename]){
+      el.youtubeUrl.value = urlConfig[filename].id || "";
+      el.videoDelay.value = urlConfig[filename].delay || "";
+    } else {
+      const key = getYtStorageKey();
+      el.youtubeUrl.value = key ? (localStorage.getItem(key) || "") : "";
+      const delayKey = getDelayStorageKey();
+      el.videoDelay.value = delayKey ? (localStorage.getItem(delayKey) || "") : "";
+    }
   }
 
   function saveYouTubeUrl(){
-    const key = getYtStorageKey();
-    if(!key) return;
-    const val = el.youtubeUrl.value.trim();
-    if(val) localStorage.setItem(key, val);
-    else localStorage.removeItem(key);
-    const delayKey = getDelayStorageKey();
+    const filename = state.currentLogFilename;
+    if(!filename) return;
+    const vidId = extractYouTubeId(el.youtubeUrl.value);
     const delayVal = el.videoDelay.value.trim();
+
+    // Save to localStorage
+    const key = getYtStorageKey();
+    if(key){
+      if(vidId) localStorage.setItem(key, el.youtubeUrl.value.trim());
+      else localStorage.removeItem(key);
+    }
+    const delayKey = getDelayStorageKey();
     if(delayKey){
       if(delayVal) localStorage.setItem(delayKey, delayVal);
       else localStorage.removeItem(delayKey);
     }
+
+    // Save to URL param (merge with existing config for other sessions)
+    const config = getFullVideoConfig();
+    if(vidId){
+      config[filename] = { id: vidId };
+      if(delayVal && delayVal !== "0") config[filename].delay = delayVal;
+    } else {
+      delete config[filename];
+    }
+    pushVideoConfigToUrl(config);
   }
 
   function clearYouTubeUrl(){
+    const filename = state.currentLogFilename;
     const key = getYtStorageKey();
     if(key) localStorage.removeItem(key);
     const delayKey = getDelayStorageKey();
@@ -161,6 +215,13 @@
     el.youtubeUrl.value = "";
     el.videoDelay.value = "";
     destroyYtPlayer();
+
+    // Remove from URL config
+    if(filename){
+      const config = getFullVideoConfig();
+      delete config[filename];
+      pushVideoConfigToUrl(config);
+    }
   }
 
   function getActiveYouTubeId(){
