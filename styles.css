@@ -323,7 +323,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   .video-section {
     flex: none;
     min-height: 0;
-    padding-bottom: 40px;
+    padding-bottom: 120px;
   }
   .video-container {
     position: relative;

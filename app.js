@@ -520,7 +520,7 @@
 
   function clear(){ ctx.clearRect(0,0,canvas.width,canvas.height); }
 
-  function drawSegment(lat0, lon0, lat1, lon1, color, a, width=3){
+  function drawSegment(lat0, lon0, lat1, lon1, color, a, width=1.5){
     if(a<=0) return;
     const [x0,y0]=project(lat0, lon0), [x1,y1]=project(lat1, lon1);
     ctx.globalAlpha=a;
@@ -575,7 +575,7 @@
     if(state.boogieEnabled){
       for(let i=start+1;i<=idx;i++){
         if(!state.boogieValid[i-1] || !state.boogieValid[i]) continue;
-        drawSegment(state.boogieLats[i-1], state.boogieLons[i-1], state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 2.5);
+        drawSegment(state.boogieLats[i-1], state.boogieLons[i-1], state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 1.25);
       }
       for(let i=start;i<=idx;i++){
         if(!state.boogieValid[i]) continue;
