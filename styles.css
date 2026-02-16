@@ -231,7 +231,10 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   flex: 1;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
+  overflow: hidden;
 }
 .video-header {
   display: flex;
@@ -254,8 +257,9 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 .close-btn:hover { color: #e04040; }
 .video-container {
   position: relative;
-  flex: 1;
-  min-height: 0;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 100%;
   background: #f7f8fa;
 }
 #ytPlayer, .video-container iframe {

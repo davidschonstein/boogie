@@ -255,6 +255,8 @@
     return extractYouTubeId(el.youtubeUrl.value);
   }
 
+  let pendingYtAction = null;   // queued seek+play for when player becomes ready
+
   function ensureYtPlayer(videoId){
     if(!ytReady) return false;
     if(ytPlayer && ytPlayer._videoId === videoId) return true;
@@ -269,8 +271,18 @@
         modestbranding: 1,
         rel: 0,
         disablekb: 1,         // disable keyboard shortcuts on player
+        playsinline: 1,       // play inline on mobile (no fullscreen takeover)
         vq: "hd2160",         // request 4K playback
       },
+      events: {
+        onReady: function(){
+          if(pendingYtAction){
+            const fn = pendingYtAction;
+            pendingYtAction = null;
+            fn();
+          }
+        }
+      }
     });
     ytPlayer._videoId = videoId;
     return true;
@@ -393,8 +405,8 @@
           try { ytPlayer.setPlaybackQuality("hd2160"); } catch(e){}
         } catch(e){}
       };
-      if(ytPlayer.seekTo) doSeek();
-      else setTimeout(doSeek, 1000);
+      if(ytPlayer.seekTo && typeof ytPlayer.seekTo === "function") doSeek();
+      else pendingYtAction = doSeek;
     }
   }
 
@@ -441,7 +453,7 @@
     return idx > ride.endIdx + tailSamples;
   }
 
-  function checkScrubberVideo(idx){
+  function checkScrubberVideo(idx, manual){
     if(!getActiveYouTubeId()) return;
 
     // Stop at end of ride clip
@@ -456,6 +468,9 @@
     const ride = rideAtIndex(idx);
     if(ride > 0 && ride !== state.activeVideoRide){
       // Entering a new ride zone — seek video to matching position
+      playRide(ride, idx);
+    } else if(ride > 0 && ride === state.activeVideoRide && manual){
+      // User manually scrubbed within same ride — re-seek video
       playRide(ride, idx);
     } else if(ride < 0 && state.activeVideoRide > 0){
       // Left a ride zone
@@ -520,7 +535,7 @@
 
   function clear(){ ctx.clearRect(0,0,canvas.width,canvas.height); }
 
-  function drawSegment(lat0, lon0, lat1, lon1, color, a, width=1.5){
+  function drawSegment(lat0, lon0, lat1, lon1, color, a, width=3){
     if(a<=0) return;
     const [x0,y0]=project(lat0, lon0), [x1,y1]=project(lat1, lon1);
     ctx.globalAlpha=a;
@@ -529,7 +544,7 @@
   }
 
   // fill-only points (no black border)
-  function drawPoint(lat, lon, color, a, r=3.3){
+  function drawPoint(lat, lon, color, a, r=2.3){
     if(a<=0) return;
     const [x,y]=project(lat, lon);
     ctx.globalAlpha=a;
@@ -566,20 +581,20 @@
     for(let i=start+1;i<=idx;i++){
       const a = alphaFor(i, idx);
       const color = state.modeColors[state.modes[i-1]] || "#000";
-      drawSegment(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i], color, a, 1.5);
+      drawSegment(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i], color, a, 3);
     }
     for(let i=start;i<=idx;i++){
-      drawPoint(state.lats[i], state.lons[i], state.modeColors[state.modes[i]] || "#000", alphaFor(i, idx), 3.3);
+      drawPoint(state.lats[i], state.lons[i], state.modeColors[state.modes[i]] || "#000", alphaFor(i, idx), 2.3);
     }
 
     if(state.boogieEnabled){
       for(let i=start+1;i<=idx;i++){
         if(!state.boogieValid[i-1] || !state.boogieValid[i]) continue;
-        drawSegment(state.boogieLats[i-1], state.boogieLons[i-1], state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 1.25);
+        drawSegment(state.boogieLats[i-1], state.boogieLons[i-1], state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 2.5);
       }
       for(let i=start;i<=idx;i++){
         if(!state.boogieValid[i]) continue;
-        drawPoint(state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 2.6);
+        drawPoint(state.boogieLats[i], state.boogieLons[i], BOOGIE_COLOR, alphaFor(i, idx), 1.8);
       }
     }
 
@@ -1111,7 +1126,7 @@
     state.currentIdx=parseInt(el.slider.value||"0",10);
     el.timeLabel.textContent=formatTimeLabel(state.currentIdx);
     redraw(state.currentIdx);
-    checkScrubberVideo(state.currentIdx);
+    checkScrubberVideo(state.currentIdx, true);
   });
   el.logSelect.addEventListener("change", ()=>{
     state.activeVideoRide = -1;
