@@ -200,6 +200,10 @@
       const delayKey = getDelayStorageKey();
       el.videoDelay.value = delayKey ? (localStorage.getItem(delayKey) || "") : "";
     }
+
+    // Pre-create YouTube player so it's ready when user clicks a ride
+    const videoId = getActiveYouTubeId();
+    if(videoId) ensureYtPlayer(videoId);
   }
 
   function saveYouTubeUrl(){
@@ -1139,6 +1143,9 @@
 
   el.btnSaveYt.addEventListener("click", ()=>{
     saveYouTubeUrl();
+    // Pre-create player so first ride click works on mobile
+    const videoId = getActiveYouTubeId();
+    if(videoId) ensureYtPlayer(videoId);
     // Re-render insights to update clickable links
     if(state.loaded){
       const ins = computeInsights();
