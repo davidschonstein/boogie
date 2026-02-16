@@ -566,7 +566,7 @@
     for(let i=start+1;i<=idx;i++){
       const a = alphaFor(i, idx);
       const color = state.modeColors[state.modes[i-1]] || "#000";
-      drawSegment(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i], color, a, 3);
+      drawSegment(state.lats[i-1], state.lons[i-1], state.lats[i], state.lons[i], color, a, 1.5);
     }
     for(let i=start;i<=idx;i++){
       drawPoint(state.lats[i], state.lons[i], state.modeColors[state.modes[i]] || "#000", alphaFor(i, idx), 3.3);

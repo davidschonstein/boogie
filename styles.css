@@ -213,9 +213,8 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   font-size: 11px;
   transition: background 0.12s;
   line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
 }
 .ride-link:hover {
   background: rgba(74, 124, 255, 0.08);
@@ -324,6 +323,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   .video-section {
     flex: none;
     min-height: 0;
+    padding-bottom: 40px;
   }
   .video-container {
     position: relative;
