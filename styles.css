@@ -289,13 +289,16 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 
 /* Responsive */
 @media (max-width: 900px) {
-  .app-layout { flex-direction: column; }
+  html, body { overflow: hidden; height: 100%; }
+  .app-layout { flex-direction: column; height: 100dvh; height: 100vh; }
   .map-column { flex: none; height: 40vh; }
   .sidebar {
     width: 100%;
     flex: 1;
-    overflow-y: auto;
+    min-height: 0;
+    overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
   .top-band { flex-direction: column; }
   .band-insights { flex: none; }
